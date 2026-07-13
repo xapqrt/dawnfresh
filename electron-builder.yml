@@ -14,6 +14,9 @@ mac:
   target: dmg
   icon: "src/assets/img/icon.icns"
   artifactName: "${name}-setup-mac-${version}.${ext}"
+  extendInfo:
+    LSApplicationCategoryType: "public.app-category.games"
+    NSSupportsAutomaticGraphicsSwitching: true
 linux:
   target:
     - AppImage

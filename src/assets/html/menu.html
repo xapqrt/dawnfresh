@@ -330,6 +330,10 @@
           <i class="fas fa-gun"></i>
           Weapon Customization
         </div>
+        <div data-tab="combat" class="juice inner-tab">
+          <i class="fas fa-bolt"></i>
+          Combat
+        </div>
       </div>
       <div id="visual-options" class="juice options inner">
         <div class="option-group">
@@ -582,10 +586,56 @@
                         <input type="range" id="weapon_offset_z" class="slider-value" data-setting="weapon_offset_z"
                           min="-0.5" step="0.01" max="0.5" />
                         <label for="weapon_offset_z"></label>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+          </div>
+        </div>
+      </div>
+      <div id="combat-options" class="juice options inner">
+        <div class="option-group">
+          <div class="option">
+            <div class="left">
+              <span>Auto Bhop (Fast)</span>
+              <span class="description">Hold the toggle key (default Shift) to auto-hop; simulates your jump key at max speed with zero added delay</span>
+            </div>
+            <div class="checkbox">
+              <input type="checkbox" id="bhop_enabled" data-setting="bhop_enabled" />
+              <label for="bhop_enabled"></label>
+            </div>
+          </div>
+          <div class="option">
+            <div class="left">
+              <span>Bhop Toggle Key</span>
+              <span class="description">The key that starts/stops bhop (must differ from your jump key)</span>
+            </div>
+            <select data-setting="bhop_toggle">
+              <option value="Shift">Shift</option>
+              <option value="Control">Control</option>
+              <option value="Alt">Alt</option>
+            </select>
+          </div>
+          <div class="option">
+            <div class="left">
+              <span>Bhop Jump Key</span>
+              <span class="description">The key the game uses to jump (Kirka default is Q)</span>
+            </div>
+            <select data-setting="bhop_jump">
+              <option value="KeyQ">Q</option>
+              <option value="Space">Space</option>
+              <option value="KeyW">W</option>
+            </select>
+          </div>
+          <div class="option">
+            <div class="left">
+              <span>Zero Input Delay Shoot</span>
+              <span class="description">Hold left click to fire at the maximum possible rate with no added delay</span>
+            </div>
+            <div class="checkbox">
+              <input type="checkbox" id="rapid_fire" data-setting="rapid_fire" />
+              <label for="rapid_fire"></label>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
               </div>
               <div class="option">
                 <button id="reset-weapon-settings" class="juice-button large">

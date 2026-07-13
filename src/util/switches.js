@@ -13,6 +13,7 @@ function applySwitches(settings) {
   app.commandLine.appendSwitch("ignore-gpu-blacklist");
   app.commandLine.appendSwitch("enable-gpu-rasterization");
   app.commandLine.appendSwitch("enable-zero-copy");
+  app.commandLine.appendSwitch("num-raster-threads", String(settings.num_raster_threads || 4));
   app.allowRendererProcessReuse = true;
 }
 

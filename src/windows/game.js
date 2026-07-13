@@ -337,9 +337,9 @@ ipcMain.on("save-sound", (event, soundname, filePath, volume) => {
   }
 });
 
-ipcMain.on("navigate", (_, url) => {
-  gameWindow.loadURL(url);
-});
+  ipcMain.on("navigate", (_, url) => {
+    gameWindow.loadURL(url);
+  });
 
 applySwitches(settings);
 
@@ -360,6 +360,9 @@ const createWindow = () => {
       webviewTag: true,
       sandbox: false,
       webSecurity: false,
+      backgroundThrottling: false,
+      v8CacheOptions: 'none',
+      disableBlinkFeatures: 'SmoothScrolling,TouchEvent,Vibration,WebShare,WebBluetooth,WebUSB,WebMIDI,Presentation,Notifications',
       preload: path.join(__dirname, "../preload/game.js"),
     },
   });
@@ -371,8 +374,14 @@ const createWindow = () => {
   }
 
   gameWindow.webContents.setUserAgent(
-    `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.7204.296 Safari/537.36 Electron/10.4.7 DawnClient/${app.getVersion()}`
+    `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.7204.96 Safari/537.36 Electron/10.4.7 DawnClient/${app.getVersion()}`
   );
+
+  gameWindow.webContents.setFrameRate(-1);
+
+  let _menuOpen = false;
+  ipcMain.on("menu-state", (_, open) => { _menuOpen = open; });
+  ipcMain.on("match-state", (_, inMatch) => { if (gameWindow) gameWindow.webContents.setFrameRate(-1); });
 
   const scriptsPath = path.join(
     app.getPath("documents"),

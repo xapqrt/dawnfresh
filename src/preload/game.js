@@ -13,8 +13,12 @@ require("../addons/Custom Skin Link")
 const scriptsPath = ipcRenderer.sendSync("get-scripts-path");
 const scripts = fs.readdirSync(scriptsPath);
 
-const settings = ipcRenderer.sendSync("get-settings");
+let settings = ipcRenderer.sendSync("get-settings");
 const base_url = settings.base_url;
+
+document.addEventListener("juice-settings-changed", ({ detail }) => {
+  if (detail && detail.setting !== undefined) settings[detail.setting] = detail.value;
+});
 
 if (!window.location.href.startsWith(base_url)) {
   delete window.process;
@@ -32,26 +36,15 @@ if (!window.location.href.startsWith(base_url)) {
   });
 }
 
-const observeForElement = (selector, functionToRun, target = document.body) => {
-  const observer = new MutationObserver((mutations, obs) => {
-    for (const mutation of mutations) {
-      if (mutation.type === "childList" && mutation.addedNodes.length > 0) {
-        mutation.addedNodes.forEach(node => {
-          if (node.nodeType === Node.ELEMENT_NODE) {
-            if (node.matches(selector)) {
-              functionToRun(node);
-            } else {
-              const inner = node.querySelector(selector);
-              if (inner) functionToRun(inner);
-            }
-          }
-        });
-      }
-    }
-  });
-  observer.observe(target, { childList: true, subtree: true });
-  return observer;
-};
+const { observeForElement } = require('../dom/observer-router');
+const eventRegistry = require('../dom/event-registry');
+const cleanupManager = require('../dom/cleanup-manager');
+
+const { installBhopHook } = require('./game/bhop');
+const { installRapidFire } = require('./game/rapidfire');
+
+installBhopHook();
+installRapidFire(settings);
 
 const originalConsole = {
   log: console.log.bind(console),
@@ -733,7 +726,6 @@ window.addEventListener("DOMContentLoaded", async () => {
     document.head.appendChild(customStyles);
 
     window.updateTheme = () => {
-      const settings = ipcRenderer.sendSync("get-settings");
       const cssLink = settings.css_link;
       const advancedCSS = settings.advanced_css;
 
@@ -755,7 +747,6 @@ window.addEventListener("DOMContentLoaded", async () => {
     document.head.appendChild(addedStyles);
 
     const updateUIFeatures = () => {
-      const settings = ipcRenderer.sendSync("get-settings");
       const styles = [];
 
       if (settings.perm_tablist)
@@ -984,27 +975,10 @@ window.addEventListener("DOMContentLoaded", async () => {
   };
 
   const initWeaponMods = () => {
-    let inspectStart = null;
-    let inspectingWeaponId = null;
+    const wHook = require('../webgl/weapon-hook');
 
-    let latchedWeaponSig = null;
-    let settlerSig = null;
-    let settlerSince = 0;
-    const SETTLE_MS = 120;
-
-    const INSPECT_DURATIONS = {
-      vita: 600,
-      rev: 550,
-      mac10: 800,
-      ar9: 550,
-      m60: 550,
-      scar: 550,
-      shark: 550,
-      lar: 550,
-      weatie: 550,
-      bayonet: 800,
-      tomahawk: 750,
-    };
+    wHook.hookWebGL();
+    wHook.setInspectKeybind(settings.inspect_keybind);
 
     const inspectKeyframes_vita = (t) => {
       const easeOut = (x) => 1 - Math.pow(1 - x, 3);
@@ -1653,20 +1627,6 @@ window.addEventListener("DOMContentLoaded", async () => {
       tomahawk: inspectKeyframes_tomahawk,
     };
 
-    const armSigs = new Set([
-      "1.40,1.40,1.40",
-      "1.99,1.68,2.11",
-      "1.88,1.40,1.88",
-      "1.11,1.11,1.77",
-      "1.50,1.40,1.76",
-      "1.13,0.85,1.77",
-      "0.81,1.08,1.38",
-      "1.52,1.15,1.61",
-      "1.16,1.48,0.94",
-      "1.08,1.10,1.77",
-      "1.54,0.92,2.24",
-    ]);
-
     const armKeyframeMap = {
       vita_right: armKeyframes_vita_right,
       vita_left: armKeyframes_vita_left,
@@ -1720,12 +1680,13 @@ window.addEventListener("DOMContentLoaded", async () => {
       if (id) {
         domWeaponId = id;
         window.currentWeaponId = id;
+        wHook.updateDomWeaponId(id);
       }
     };
 
     updateDomWeaponId();
 
-    const weaponMutationObserver = new MutationObserver((mutations) => {
+    const weaponObserver = cleanupManager.addObserver(new MutationObserver((mutations) => {
       for (const m of mutations) {
         if (m.type === "attributes" && m.attributeName === "class") {
           if (m.target instanceof HTMLElement && m.target.classList.contains("bottom")) {
@@ -1744,59 +1705,14 @@ window.addEventListener("DOMContentLoaded", async () => {
           }
         }
       }
-    });
+    }));
 
-    weaponMutationObserver.observe(document.body, {
+    weaponObserver.observe(document.body, {
       attributes: true,
       attributeFilter: ["class"],
       childList: true,
       subtree: true,
     });
-
-    let globalFrameId = 0;
-    const bumpGlobalFrame = () => {
-      globalFrameId++;
-      requestAnimationFrame(bumpGlobalFrame);
-    };
-    requestAnimationFrame(bumpGlobalFrame);
-
-    const applyZSpin = (mat, angle) => {
-      const cos = Math.cos(angle), sin = Math.sin(angle);
-      const sx = Math.sqrt(mat[0] * mat[0] + mat[1] * mat[1] + mat[2] * mat[2]);
-      const sy = Math.sqrt(mat[4] * mat[4] + mat[5] * mat[5] + mat[6] * mat[6]);
-      const x0 = mat[0] / sx, x1 = mat[1] / sx, x2 = mat[2] / sx;
-      const y0 = mat[4] / sy, y1 = mat[5] / sy, y2 = mat[6] / sy;
-      const nx0 = x0 * cos - y0 * sin, nx1 = x1 * cos - y1 * sin, nx2 = x2 * cos - y2 * sin;
-      const ny0 = x0 * sin + y0 * cos, ny1 = x1 * sin + y1 * cos, ny2 = x2 * sin + y2 * cos;
-      mat[0] = nx0 * sx; mat[1] = nx1 * sx; mat[2] = nx2 * sx;
-      mat[4] = ny0 * sy; mat[5] = ny1 * sy; mat[6] = ny2 * sy;
-    };
-
-    const applyXSpin = (mat, angle) => {
-      const cos = Math.cos(angle), sin = Math.sin(angle);
-      const sy = Math.sqrt(mat[4] * mat[4] + mat[5] * mat[5] + mat[6] * mat[6]);
-      const sz = Math.sqrt(mat[8] * mat[8] + mat[9] * mat[9] + mat[10] * mat[10]);
-      const y0 = mat[4] / sy, y1 = mat[5] / sy, y2 = mat[6] / sy;
-      const z0 = mat[8] / sz, z1 = mat[9] / sz, z2 = mat[10] / sz;
-      const ny0 = y0 * cos - z0 * sin, ny1 = y1 * cos - z1 * sin, ny2 = y2 * cos - z2 * sin;
-      const nz0 = y0 * sin + z0 * cos, nz1 = y1 * sin + z1 * cos, nz2 = y2 * sin + z2 * cos;
-      mat[4] = ny0 * sy; mat[5] = ny1 * sy; mat[6] = ny2 * sy;
-      mat[8] = nz0 * sz; mat[9] = nz1 * sz; mat[10] = nz2 * sz;
-    };
-
-    const applyYSpin = (mat, angle) => {
-      const cos = Math.cos(angle), sin = Math.sin(angle);
-      const sx = Math.sqrt(mat[0] * mat[0] + mat[1] * mat[1] + mat[2] * mat[2]);
-      const sz = Math.sqrt(mat[8] * mat[8] + mat[9] * mat[9] + mat[10] * mat[10]);
-      const x0 = mat[0] / sx, x1 = mat[1] / sx, x2 = mat[2] / sx;
-      const z0 = mat[8] / sz, z1 = mat[9] / sz, z2 = mat[10] / sz;
-      const nx0 = x0 * cos + z0 * sin, nx1 = x1 * cos + z1 * sin, nx2 = x2 * cos + z2 * sin;
-      const nz0 = -x0 * sin + z0 * cos, nz1 = -x1 * sin + z1 * cos, nz2 = -x2 * sin + z2 * cos;
-      mat[0] = nx0 * sx; mat[1] = nx1 * sx; mat[2] = nx2 * sx;
-      mat[8] = nz0 * sz; mat[9] = nz1 * sz; mat[10] = nz2 * sz;
-    };
-
-    let currentInspectKeybind = settings.inspect_keybind;
 
     const inspectKeybindHandler = (e) => {
       let inputName;
@@ -1811,11 +1727,12 @@ window.addEventListener("DOMContentLoaded", async () => {
       }
       if (inputName === currentInspectKeybind) {
         if (document.querySelector(".chat input[type='text']:focus")) return;
-        inspectStart = performance.now();
-        inspectingWeaponId = domWeaponId || null;
+        wHook.startInspect(performance.now(), domWeaponId || null);
         e.preventDefault();
       }
     };
+
+    let currentInspectKeybind = settings.inspect_keybind;
 
     document.addEventListener("mousedown", inspectKeybindHandler, true);
     document.addEventListener("keydown", inspectKeybindHandler, true);
@@ -1823,349 +1740,11 @@ window.addEventListener("DOMContentLoaded", async () => {
     document.addEventListener("juice-settings-changed", ({ detail }) => {
       if (detail.setting === "inspect_keybind") {
         currentInspectKeybind = detail.value;
+        wHook.setInspectKeybind(detail.value);
       }
     });
 
-    const hsvToRgb = (hue) => {
-      hue = ((hue % 360) + 360) % 360;
-      const sector = Math.floor(hue / 60);
-      const f = (hue / 60) - sector;
-      const q = Math.round((1 - f) * 255);
-      const t = Math.round(f * 255);
-      switch (sector) {
-        case 0: return [255, t, 0];
-        case 1: return [q, 255, 0];
-        case 2: return [0, 255, t];
-        case 3: return [0, q, 255];
-        case 4: return [t, 0, 255];
-        default: return [255, 0, q];
-      }
-    };
-
-    const colMag = (m, i) =>
-      Math.sqrt(m[i] * m[i] + m[i + 1] * m[i + 1] + m[i + 2] * m[i + 2]);
-
-    const hookedContexts = new WeakSet();
-    const originalGetCtx = HTMLCanvasElement.prototype.getContext;
-
-    HTMLCanvasElement.prototype.getContext = function (type, attrs) {
-      const ctx = originalGetCtx.call(this, type, attrs);
-      if (!ctx || (type !== "webgl" && type !== "webgl2")) return ctx;
-      if (hookedContexts.has(ctx) || this.id !== "game") return ctx;
-      hookedContexts.add(ctx);
-
-      const gl = ctx;
-      const matBuf = new Float32Array(16);
-      const rgbPixel = new Uint8Array([255, 255, 255, 255]);
-
-      const rgbTexture = gl.createTexture();
-      gl.bindTexture(gl.TEXTURE_2D, rgbTexture);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgbPixel);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-      gl.bindTexture(gl.TEXTURE_2D, null);
-
-      const origUniformMatrix4fv = gl.uniformMatrix4fv.bind(gl);
-      const origDrawArrays = gl.drawArrays.bind(gl);
-      const origDrawElements = gl.drawElements.bind(gl);
-      const origBindTexture = gl.bindTexture.bind(gl);
-
-      let activeThisFrame = false;
-      let lastBoundTexture = null;
-      let seenMatricesThisFrame = new Set();
-      let lastFrameTime = -1;
-      let tomahawkSigCount = 0;
-
-      let lastTomahawkFrameId = -1;
-
-      let lastClearMask = 0;
-
-      const origClear = gl.clear.bind(gl);
-      gl.clear = (mask) => {
-        lastClearMask = mask;
-        return origClear(mask);
-      };
-
-      gl.bindTexture = (target, texture) => {
-        if (target === gl.TEXTURE_2D) lastBoundTexture = texture;
-        return origBindTexture(target, texture);
-      };
-
-      gl.uniformMatrix4fv = (location, transpose, data, srcOffset, srcLength) => {
-        activeThisFrame = false;
-
-        const now = performance.now();
-        if (now !== lastFrameTime) {
-          seenMatricesThisFrame.clear();
-          lastFrameTime = now;
-        }
-
-        if (globalFrameId !== lastTomahawkFrameId) {
-          tomahawkSigCount = 0;
-          lastTomahawkFrameId = globalFrameId;
-        }
-
-        if (data && data.length >= 16) {
-          const offset = srcOffset ?? 0;
-          const slice = (offset === 0 && data.length === 16)
-            ? data
-            : (data.subarray ? data.subarray(offset, offset + 16) : data.slice(offset, offset + 16));
-
-          if (
-            Math.abs(slice[3]) > 0.001 ||
-            Math.abs(slice[7]) > 0.001 ||
-            Math.abs(slice[11]) > 0.001 ||
-            Math.abs(slice[15] - 1.0) > 0.001
-          ) {
-            return origUniformMatrix4fv(location, transpose, data, srcOffset, srcLength);
-          }
-
-          const s0 = colMag(slice, 0), s1 = colMag(slice, 4), s2 = colMag(slice, 8);
-          const sig = `${s0.toFixed(2)},${s1.toFixed(2)},${s2.toFixed(2)}`;
-
-          const isCollidingSig = sig === "1.54,0.92,2.24";
-          let treatAsArm;
-          if (isCollidingSig) {
-            tomahawkSigCount++;
-            treatAsArm = tomahawkSigCount > 1;
-          } else {
-            treatAsArm = armSigs.has(sig);
-          }
-
-          if (!treatAsArm) {
-            if (lastClearMask !== 256) {
-              return origUniformMatrix4fv(location, transpose, data, srcOffset, srcLength);
-            }
-
-            const fp = `${slice[0].toFixed(3)},${slice[5].toFixed(3)},${slice[10].toFixed(3)},${slice[12].toFixed(4)},${slice[13].toFixed(4)},${slice[14].toFixed(4)}`;
-            if (seenMatricesThisFrame.has(fp)) {
-              return origUniformMatrix4fv(location, transpose, data, srcOffset, srcLength);
-            }
-            seenMatricesThisFrame.add(fp);
-
-            const currentWeaponId = domWeaponId || "vita";
-            window.currentWeaponId = currentWeaponId;
-
-            if (inspectStart !== null && inspectingWeaponId !== null && inspectingWeaponId !== currentWeaponId) {
-              inspectStart = null;
-              inspectingWeaponId = null;
-            }
-
-            const weaponCfg = window.dawnWeaponConfig?.getSettings?.(currentWeaponId) || {
-              size: 1.0, offsetX: 0, offsetY: 0, offsetZ: 0
-            };
-            const globalCfg = window.dawnWeaponConfig || {
-              wireframe: false, colorEnabled: false, rgb: false, colorHex: "#FFFFFF"
-            };
-
-            if (globalCfg.colorEnabled) {
-              if (globalCfg.rgb) {
-                const [r, g, b] = hsvToRgb((now / 3000) * 360);
-                rgbPixel[0] = r; rgbPixel[1] = g; rgbPixel[2] = b; rgbPixel[3] = 255;
-                origBindTexture(gl.TEXTURE_2D, rgbTexture);
-                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgbPixel);
-              } else {
-                const hex = globalCfg.colorHex.replace("#", "");
-                rgbPixel[0] = parseInt(hex.substring(0, 2), 16);
-                rgbPixel[1] = parseInt(hex.substring(2, 4), 16);
-                rgbPixel[2] = parseInt(hex.substring(4, 6), 16);
-                rgbPixel[3] = 255;
-                origBindTexture(gl.TEXTURE_2D, rgbTexture);
-                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgbPixel);
-              }
-            } else if (lastBoundTexture) {
-              origBindTexture(gl.TEXTURE_2D, lastBoundTexture);
-            }
-
-            latchedWeaponSig = sig;
-            if (sig !== settlerSig) {
-              settlerSig = sig;
-              settlerSince = now;
-            }
-
-            let base = weaponCfg.size ?? 1.0;
-            matBuf.set(slice);
-            let scale = base;
-            let ox = weaponCfg.offsetX ?? 0;
-            let oy = weaponCfg.offsetY ?? 0;
-            let oz = weaponCfg.offsetZ ?? 0;
-            let spinZAngle = 0;
-            let spinXAngle = 0;
-            let spinYAngle = 0;
-            let baseSpinXAngle = 0;
-
-            if (inspectStart !== null && inspectingWeaponId === null) {
-              inspectingWeaponId = currentWeaponId;
-            }
-
-            if (inspectStart !== null && inspectingWeaponId === currentWeaponId) {
-              const animFn = weaponIdToInspectKeyframes[currentWeaponId];
-              const inspectDuration = INSPECT_DURATIONS[currentWeaponId] ?? 1000;
-              if (animFn) {
-                const elapsed = now - inspectStart;
-                const t = Math.min(elapsed / inspectDuration, 1.0);
-                const kf = animFn(t);
-                scale = base * (kf.scale ?? 1);
-                ox += (kf.offsetX ?? 0) * scale;
-                oy += (kf.offsetY ?? 0) * scale;
-                oz += (kf.offsetZ ?? 0) * scale;
-                spinZAngle = kf.spinZ ?? 0;
-                spinXAngle = kf.spinX ?? 0;
-                spinYAngle = kf.spinY ?? 0;
-                if (t >= 1.0) {
-                  inspectStart = null;
-                  inspectingWeaponId = null;
-                }
-              } else {
-                inspectStart = null;
-                inspectingWeaponId = null;
-              }
-            }
-
-            matBuf[0] *= scale; matBuf[1] *= scale; matBuf[2] *= scale;
-            matBuf[4] *= scale; matBuf[5] *= scale; matBuf[6] *= scale;
-            matBuf[8] *= scale; matBuf[9] *= scale; matBuf[10] *= scale;
-            matBuf[12] += ox;
-            matBuf[13] += oy;
-            matBuf[14] += oz;
-
-            if (spinZAngle !== 0) applyZSpin(matBuf, spinZAngle);
-            if (baseSpinXAngle !== 0) applyXSpin(matBuf, baseSpinXAngle);
-            if (spinXAngle !== 0) applyXSpin(matBuf, spinXAngle);
-            if (spinYAngle !== 0) applyYSpin(matBuf, spinYAngle);
-
-            if (globalCfg.wireframe) activeThisFrame = true;
-
-            return origUniformMatrix4fv(location, transpose, matBuf, 0, 16);
-          }
-
-          if (treatAsArm) {
-            if (lastClearMask !== 256) {
-              return origUniformMatrix4fv(location, transpose, data, srcOffset, srcLength);
-            }
-
-            const fp = `${slice[0].toFixed(3)},${slice[5].toFixed(3)},${slice[10].toFixed(3)},${slice[12].toFixed(4)},${slice[13].toFixed(4)},${slice[14].toFixed(4)}`;
-            if (seenMatricesThisFrame.has(fp)) {
-              return origUniformMatrix4fv(location, transpose, data, srcOffset, srcLength);
-            }
-            seenMatricesThisFrame.add(fp);
-
-            const currentWeaponId = domWeaponId || "vita";
-
-            const armSigToType = {
-              "1.40,1.40,1.40": "right",
-              "1.99,1.68,2.11": "left",
-              "1.11,1.11,1.77": "right",
-              "1.50,1.40,1.76": "right",
-              "1.13,0.85,1.77": "left",
-              "0.81,1.08,1.38": "left",
-              "1.52,1.15,1.61": "right",
-              "1.16,1.48,0.94": "right",
-              "1.54,0.92,2.24": "right",
-              "1.08,1.10,1.77": "left",
-              "1.88,1.40,1.88": "left"
-            };
-
-            let armType = armSigToType[sig] || "left";
-            if (sig === "1.40,1.40,1.40" && window.currentWeaponId === "tomahawk") {
-              armType = slice[12] > 0 ? "right" : "left";
-            }
-
-            if (armType === null) {
-              return origUniformMatrix4fv(location, transpose, data, srcOffset, srcLength);
-            }
-
-            const armSettings = window.dawnWeaponConfig?.getArmSettings?.(currentWeaponId, armType) || {
-              size: 1.0, offsetX: 0, offsetY: 0, offsetZ: 0,
-              wireframe: false, colorEnabled: false, colorHex: "#FFFFFF", rgb: false
-            };
-
-            matBuf.set(slice);
-
-            let armScale = armSettings.size ?? 1.0;
-            let ox = armSettings.offsetX ?? 0;
-            let oy = armSettings.offsetY ?? 0;
-            let oz = armSettings.offsetZ ?? 0;
-
-            let armSpinX = 0;
-            let armSpinY = 0;
-            let armSpinZ = 0;
-
-            if (inspectStart !== null && inspectingWeaponId === currentWeaponId) {
-              const armFn = armKeyframeMap[`${currentWeaponId}_${armType}`] ?? null;
-              const inspectDuration = INSPECT_DURATIONS[currentWeaponId] ?? 1000;
-              if (armFn !== null) {
-                const elapsed = now - inspectStart;
-                const t = Math.min(elapsed / inspectDuration, 1.0);
-                const kf = armFn(t);
-                ox += (kf.offsetX ?? 0) * armScale;
-                oy += (kf.offsetY ?? 0) * armScale;
-                oz += (kf.offsetZ ?? 0) * armScale;
-                armSpinX = kf.spinX ?? 0;
-                armSpinY = kf.spinY ?? 0;
-                armSpinZ = kf.spinZ ?? 0;
-              }
-            }
-
-            matBuf[0] *= armScale; matBuf[1] *= armScale; matBuf[2] *= armScale;
-            matBuf[4] *= armScale; matBuf[5] *= armScale; matBuf[6] *= armScale;
-            matBuf[8] *= armScale; matBuf[9] *= armScale; matBuf[10] *= armScale;
-            matBuf[12] += ox;
-            matBuf[13] += oy;
-            matBuf[14] += oz;
-
-            if (armSpinX !== 0) applyXSpin(matBuf, armSpinX);
-            if (armSpinY !== 0) applyYSpin(matBuf, armSpinY);
-            if (armSpinZ !== 0) applyZSpin(matBuf, armSpinZ);
-
-            if (armSettings.colorEnabled) {
-              if (armSettings.rgb) {
-                const [r, g, b] = hsvToRgb((now / 3000) * 360);
-                rgbPixel[0] = r; rgbPixel[1] = g; rgbPixel[2] = b; rgbPixel[3] = 255;
-                origBindTexture(gl.TEXTURE_2D, rgbTexture);
-                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgbPixel);
-              } else {
-                const hex = (armSettings.colorHex || "#FFFFFF").replace("#", "");
-                rgbPixel[0] = parseInt(hex.substring(0, 2), 16);
-                rgbPixel[1] = parseInt(hex.substring(2, 4), 16);
-                rgbPixel[2] = parseInt(hex.substring(4, 6), 16);
-                rgbPixel[3] = 255;
-                origBindTexture(gl.TEXTURE_2D, rgbTexture);
-                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgbPixel);
-              }
-            } else if (lastBoundTexture) {
-              origBindTexture(gl.TEXTURE_2D, lastBoundTexture);
-            }
-
-            if (armSettings.wireframe) activeThisFrame = true;
-
-            return origUniformMatrix4fv(location, transpose, matBuf, 0, 16);
-          }
-        }
-
-        return origUniformMatrix4fv(location, transpose, data, srcOffset, srcLength);
-      };
-
-      const toWireframe = (mode) =>
-        (mode === gl.TRIANGLES || mode === gl.TRIANGLE_FAN || mode === gl.TRIANGLE_STRIP)
-          ? gl.LINES : mode;
-
-      gl.drawArrays = (mode, first, count) => {
-        if (activeThisFrame) mode = toWireframe(mode);
-        activeThisFrame = false;
-        seenMatricesThisFrame.clear();
-        return origDrawArrays(mode, first, count);
-      };
-
-      gl.drawElements = (mode, count, type, offset) => {
-        if (activeThisFrame) mode = toWireframe(mode);
-        activeThisFrame = false;
-        seenMatricesThisFrame.clear();
-        return origDrawElements(mode, count, type, offset);
-      };
-
-      return ctx;
-    };
+    wHook.setWeaponConfig(window.dawnWeaponConfig, weaponIdToInspectKeyframes, armKeyframeMap);
   }
 
   initWeaponMods();
@@ -2178,8 +1757,6 @@ window.addEventListener("DOMContentLoaded", async () => {
 
     initRoomPresets();
     const applyLobbyChanges = () => {
-      const settings = ipcRenderer.sendSync("get-settings");
-
       lobbyKeybindReminder(settings);
       lobbyNews(settings);
       juiceDiscordButton();
@@ -2280,7 +1857,7 @@ window.addEventListener("DOMContentLoaded", async () => {
           lobbyNickname.style.gap = "0.25rem";
           lobbyNickname.style.overflow = "unset !important";
 
-          if (ipcRenderer.sendSync("get-settings").animations) window.applyGradientAnimation(lobbyNickname, customs);
+          if (settings.animations) window.applyGradientAnimation(lobbyNickname, customs);
         } else {
           lobbyNickname.style = "display: flex; align-items: flex-end; gap: 0.25rem; overflow: unset !important;";
         }
@@ -2344,7 +1921,7 @@ window.addEventListener("DOMContentLoaded", async () => {
           clan.style.fontWeight = "700";
           clan.style.textShadow = customs.gradient.shadow || "0 0 0 transparent";
 
-          if (ipcRenderer.sendSync("get-settings").animations) window.applyGradientAnimation(clan, customs);
+          if (settings.animations) window.applyGradientAnimation(clan, customs);
         }
       };
 
@@ -2477,7 +2054,6 @@ window.addEventListener("DOMContentLoaded", async () => {
   };
 
   const handleServers = async () => {
-    const settings = ipcRenderer.sendSync("get-settings");
 
     const mapImages = await fetch(
       "https://raw.githubusercontent.com/AwesomeSam9523/KirkaSkins/refs/heads/main/maps/full_mapimages.json"
@@ -2786,7 +2362,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     };
 
     input.addEventListener("input", (e) => {
-      if (!ipcRenderer.sendSync("get-settings").command_abbreviations) return;
+      if (!settings.command_abbreviations) return;
       if (e.inputType && e.inputType.startsWith("delete")) return;
       const text = input.value;
 
@@ -2796,12 +2372,12 @@ window.addEventListener("DOMContentLoaded", async () => {
       let [, cmd, space1, sub, space2, rest] = match;
       let changed = false;
 
-      if (commandMap[cmd] && (!(ipcRenderer.sendSync("get-settings").abbreviation_confirmation) || space1.length > 0)) {
+      if (commandMap[cmd] && (!settings.abbreviation_confirmation || space1.length > 0)) {
         cmd = commandMap[cmd];
         changed = true;
       }
 
-      if (subCommandMap[sub] && (!(ipcRenderer.sendSync("get-settings").abbreviation_confirmation) || space2.length > 0)) {
+      if (subCommandMap[sub] && (!settings.abbreviation_confirmation || space2.length > 0)) {
         sub = subCommandMap[sub];
         changed = true;
       }
@@ -2817,12 +2393,11 @@ window.addEventListener("DOMContentLoaded", async () => {
     });
   };
 
-  let disconnectObservers = () => { };
+  let disconnectObservers = () => { cleanupManager.cleanup(); };
 
   const handleProfile = () => {
+    cleanupManager.reset();
     disconnectObservers();
-
-    const settings = ipcRenderer.sendSync("get-settings");
 
     const addNicknameButton = () => {
       const profile = document.querySelector(".tab-content > .profile-cont > .profile");
@@ -3141,11 +2716,11 @@ window.addEventListener("DOMContentLoaded", async () => {
 
     disconnectObservers = () => {
       obs?.disconnect();
+      cleanupManager.cleanup();
     }
   };
 
   const handleInGame = () => {
-    let settings = ipcRenderer.sendSync("get-settings");
     const nicknames = JSON.parse(localStorage.getItem("nicknames") || "{}");
 
     setAdsPower(settings.ads_power);
@@ -4685,7 +4260,6 @@ window.addEventListener("DOMContentLoaded", async () => {
   };
 
   const handleFriends = () => {
-    const settings = ipcRenderer.sendSync("get-settings");
     const nicknames = JSON.parse(localStorage.getItem("nicknames") || "{}");
 
     if (window.copyGameLink) {
@@ -5067,7 +4641,7 @@ window.addEventListener("DOMContentLoaded", async () => {
           if (subject.dataset.favoriteBound) return;
           subject.dataset.favoriteBound = "1";
           subject.addEventListener("click", (e) => {
-            if (!ipcRenderer.sendSync("get-settings").prevent_selling_favorites) return;
+            if (!settings.prevent_selling_favorites) return;
             const sellBtn = e.target.closest(".sell-btn");
             if (sellBtn) {
               e.stopImmediatePropagation();
