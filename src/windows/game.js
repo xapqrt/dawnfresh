@@ -1,7 +1,7 @@
 const { BrowserWindow, ipcMain, app, shell, session, protocol } = require("electron");
 const { default_settings, allowed_urls } = require("../util/defaults.json");
 const { initResourceSwapper } = require('../addons/swapper.js');
-const { registerShortcuts } = require("../util/shortcuts");
+const { registerShortcuts, unregisterShortcuts } = require("../util/shortcuts");
 const path = require("path");
 const Store = require("electron-store");
 const fs = require("fs-extra");
@@ -122,9 +122,9 @@ const createWindow = () => {
     `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.7204.96 Safari/537.36 Electron/10.4.7 DawnClient/${app.getVersion()}`
   );
 
-  gameWindow.webContents.on("new-window", (e, url) => {
-    e.preventDefault();
+  gameWindow.webContents.setWindowOpenHandler(({ url }) => {
     require("electron").shell.openExternal(url);
+    return { action: 'deny' };
   });
 
   gameWindow.webContents.on("did-navigate-in-page", (e, url) => {
@@ -144,6 +144,7 @@ const createWindow = () => {
   gameWindow.on("page-title-updated", (e) => e.preventDefault());
 
   gameWindow.on("closed", () => {
+    unregisterShortcuts();
     ipcMain.removeAllListeners("get-settings");
     ipcMain.removeAllListeners("update-setting");
     gameWindow = null;

@@ -3,8 +3,6 @@ productName: Dawn Client
 directories:
   output: "build"
 npmRebuild: false
-asarUnpack:
-  - "**/node_modules/ffmpeg-static/**"
 win:
   target:
     - target: nsis

@@ -1,12 +1,13 @@
-const { app, clipboard, screen } = require("electron");
-const shortcut = require("electron-localshortcut");
-const Store = require("electron-store");
-const fs = require("fs-extra");
+const { globalShortcut, clipboard, screen, app } = require("electron");
 const path = require("path");
-const store = new Store();
+const fs = require("fs-extra");
 
 const registerShortcuts = (window) => {
-  const register = (key, action) => shortcut.register(window, key, action);
+  const register = (key, action) => {
+    globalShortcut.register(key, () => {
+      if (window && !window.isDestroyed() && window.isFocused()) action();
+    });
+  };
   register("Escape", () =>
     window.webContents.executeJavaScript("document.exitPointerLock()")
   );
@@ -29,22 +30,16 @@ const registerShortcuts = (window) => {
       });
     });
   });
-  register("F4", () => {
-    window.loadURL(store.get("settings").base_url);
-  });
-  register("F5", () => {
-    window.reload();
-  });
-  register("F6", () => {
-    window.loadURL(clipboard.readText());
-  });
+  register("F4", () => window.loadURL("https://kirka.io"));
+  register("F5", () => window.reload());
+  register("F6", () => window.loadURL(clipboard.readText()));
   register("F7", () => clipboard.writeText(window.webContents.getURL()));
   register("F11", () => window.setFullScreen(!window.isFullScreen()));
   register("F12", () => window.webContents.toggleDevTools());
-  register("Ctrl+Shift+I", () => window.webContents.toggleDevTools());
-  register("Ctrl+Shift+C", () => window.webContents.toggleDevTools());
-  register("Ctrl+Shift+J", () => window.webContents.toggleDevTools());
-  register("Alt+F4", () => app.quit());
 };
 
-module.exports = { registerShortcuts };
+const unregisterShortcuts = () => {
+  globalShortcut.unregisterAll();
+};
+
+module.exports = { registerShortcuts, unregisterShortcuts };
