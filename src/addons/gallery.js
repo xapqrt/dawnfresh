@@ -1,6 +1,8 @@
 const { ipcRenderer } = require("electron");
 const path = require("path");
 const fs = require("fs");
+const { addObserver } = require("../dom/cleanup-manager");
+const { createThrottledObserver } = require("../dom/raf-throttle");
 
 const initGallery = () => {
   function loadGallery() {
@@ -57,12 +59,13 @@ const initGallery = () => {
     });
   }
 
-  const observer = new MutationObserver(() => {
+  const observer = createThrottledObserver(() => {
     if (galleryContainer.classList.contains("active")) {
       refreshOpenHeights();
     }
   });
   observer.observe(galleryContainer, { attributes: true, attributeFilter: ["class"] });
+  addObserver(observer);
 
   async function handleEntry(entry, categoryPath) {
     const targetPath = path.join(categoryPath, entry.name);
@@ -129,7 +132,7 @@ const initGallery = () => {
     const savedStates = getSavedCategoryStates();
 
     if (!categories.length) {
-      galleryContainer.innerHTML = "<div>No content found in gallery. Drag and drop folders/files to import.</div>";
+      galleryContainer.textContent = "No content found in gallery. Drag and drop folders/files to import.";
       return;
     }
 

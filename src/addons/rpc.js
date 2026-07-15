@@ -6,12 +6,21 @@ class DiscordRPC {
     this.clientId = "1384959605712355479";
     this.startTimestamp = Date.now();
     this.client = new rpc.Client({ transport: "ipc" });
+    this._retryDelay = 5000;
     this.init();
   }
 
   init() {
-    this.client.on("ready", () => this.setActivity());
-    this.client.on("disconnected", () => this.login());
+    this._reconnectTimer = null;
+    this.client.on("ready", () => { this._retryDelay = 5000; this.setActivity(); });
+    this.client.on("disconnected", () => {
+      if (this._reconnectTimer) clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = setTimeout(() => {
+        this._reconnectTimer = null;
+        this._retryDelay = Math.min(this._retryDelay * 2, 60000);
+        this.login();
+      }, this._retryDelay);
+    });
     this.login();
   }
 

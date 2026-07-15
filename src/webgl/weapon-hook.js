@@ -7,30 +7,39 @@ const _rgbPixel = new Uint8Array(4);
 let _lastDrawCall = -1;
 let _drawCallCount = 0;
 
-const _BLOOM_SIZE = 128;
+const _BLOOM_SIZE = 32;
 const _BLOOM_MASK = _BLOOM_SIZE - 1;
-const _bloom = new Uint32Array(_BLOOM_SIZE);
 
-const _resetBloom = () => {
-  for (let i = 0; i < _BLOOM_SIZE; i++) _bloom[i] = 0;
-};
+let _bloomGen = 0;
+const _bloomWords = new Uint32Array(_BLOOM_SIZE);
+const _bloomGens = new Uint32Array(_BLOOM_SIZE);
 
 const _bloomCheck = (hash) => {
   const h = (hash >>> 0) & _BLOOM_MASK;
   const bit = 1 << ((hash >>> 24) & 7);
-  const word = _bloom[h >>> 2];
+  const wordIdx = h >>> 2;
   const shift = (h & 3) << 3;
   const mask = bit << shift;
-  if (word & mask) return true;
-  _bloom[h >>> 2] = word | mask;
+  if (_bloomGens[wordIdx] === _bloomGen && (_bloomWords[wordIdx] & mask)) return true;
+  if (_bloomGens[wordIdx] !== _bloomGen) _bloomWords[wordIdx] = 0;
+  _bloomGens[wordIdx] = _bloomGen;
+  _bloomWords[wordIdx] |= mask;
   return false;
 };
 
-const _combineHash = (sig, tx, ty, tz) => {
-  let h = sig;
-  h = ((h << 5) + h + ((tx * 100) | 0)) | 0;
-  h = ((h << 5) + h + ((ty * 100) | 0)) | 0;
-  h = ((h << 5) + h + ((tz * 100) | 0)) | 0;
+const _fastHash = (m) => {
+  let h = ((m[0] * 100) | 0);
+  h = ((h << 5) - h + ((m[4] * 100) | 0)) | 0;
+  h = ((h << 5) - h + ((m[8] * 100) | 0)) | 0;
+  h = ((h << 5) - h + ((m[12] * 100) | 0)) | 0;
+  h = ((h << 5) - h + ((m[1] * 100) | 0)) | 0;
+  h = ((h << 5) - h + ((m[5] * 100) | 0)) | 0;
+  h = ((h << 5) - h + ((m[9] * 100) | 0)) | 0;
+  h = ((h << 5) - h + ((m[13] * 100) | 0)) | 0;
+  h = ((h << 5) - h + ((m[2] * 100) | 0)) | 0;
+  h = ((h << 5) - h + ((m[6] * 100) | 0)) | 0;
+  h = ((h << 5) - h + ((m[10] * 100) | 0)) | 0;
+  h = ((h << 5) - h + ((m[14] * 100) | 0)) | 0;
   return h;
 };
 
@@ -58,7 +67,6 @@ let _enableMods = false;
 
 let _inspectFns = null;
 let _armFns = null;
-let _fastPath = true;
 
 let _gameContext = null;
 
@@ -73,7 +81,6 @@ const setWeaponConfig = (config, inspectFns, armFns) => {
   _inspectFns = inspectFns;
   _armFns = armFns;
   _enableMods = !!(config && (config.wireframe || config.colorEnabled || config.rgb || config.universal));
-  _fastPath = !_enableMods && window.__weaponModsActive !== false;
 
   if (_enableMods && _gameContext) {
     _installWrappers(_gameContext);
@@ -83,14 +90,38 @@ const setWeaponConfig = (config, inspectFns, armFns) => {
 const _getCfg = (wid) => _weaponConfig?.getSettings?.(wid) || _DEFAULT_CFG;
 const _getArmCfg = (wid, type) => _weaponConfig?.getArmSettings?.(wid, type) || _DEFAULT_ARM;
 
-const _parseHex = (hex, px) => {
+const _lastHexCache = { hex: '', r: 255, g: 255, b: 255 };
+const _parseHexCached = (hex, px) => {
+  if (hex === _lastHexCache.hex) {
+    px[0] = _lastHexCache.r;
+    px[1] = _lastHexCache.g;
+    px[2] = _lastHexCache.b;
+    px[3] = 255;
+    return;
+  }
   const r = parseInt(hex[1] + hex[2], 16);
   const g = parseInt(hex[3] + hex[4], 16);
   const b = parseInt(hex[5] + hex[6], 16);
-  px[0] = isNaN(r) ? 255 : r;
-  px[1] = isNaN(g) ? 255 : g;
-  px[2] = isNaN(b) ? 255 : b;
+  _lastHexCache.hex = hex;
+  _lastHexCache.r = isNaN(r) ? 255 : r;
+  _lastHexCache.g = isNaN(g) ? 255 : g;
+  _lastHexCache.b = isNaN(b) ? 255 : b;
+  px[0] = _lastHexCache.r;
+  px[1] = _lastHexCache.g;
+  px[2] = _lastHexCache.b;
   px[3] = 255;
+};
+
+const _parseSig = (mat, offset) => {
+  return (
+    (Math.round(Math.sqrt(mat[offset] * mat[offset] + mat[offset + 1] * mat[offset + 1] + mat[offset + 2] * mat[offset + 2]) * 100) << 20) |
+    (Math.round(Math.sqrt(mat[offset + 4] * mat[offset + 4] + mat[offset + 5] * mat[offset + 5] + mat[offset + 6] * mat[offset + 6]) * 100) << 10) |
+    Math.round(Math.sqrt(mat[offset + 8] * mat[offset + 8] + mat[offset + 9] * mat[offset + 9] + mat[offset + 10] * mat[offset + 10]) * 100)
+  );
+};
+
+const _checkNonAffine = (v3, v7, v11, v15) => {
+  return (v3 > 0.001 || v3 < -0.001) || (v7 > 0.001 || v7 < -0.001) || (v11 > 0.001 || v11 < -0.001) || (v15 - 1.0 > 0.001 || v15 - 1.0 < -0.001);
 };
 
 const _installWrappers = (gl) => {
@@ -119,17 +150,22 @@ const _installWrappers = (gl) => {
       return origUniform4(location, transpose, data, srcOffset, srcLength);
     }
 
+    const offset = srcOffset | 0;
+
+    const d3 = data[offset + 3], d7 = data[offset + 7], d11 = data[offset + 11], d15 = data[offset + 15];
+
+    if (_checkNonAffine(d3, d7, d11, d15)) {
+      return origUniform4(location, transpose, data, srcOffset, srcLength);
+    }
+
     const dc = _drawCallCount;
     if (dc !== _lastDrawCall) {
-      _resetBloom();
+      _bloomGen++;
       _lastDrawCall = dc;
       _tomahawkCount = 0;
     }
 
-    const offset = srcOffset | 0;
-    const d3 = data[offset + 3], d7 = data[offset + 7], d11 = data[offset + 11], d15 = data[offset + 15];
-
-    if ((d3 > 0.001 || d3 < -0.001) || (d7 > 0.001 || d7 < -0.001) || (d11 > 0.001 || d11 < -0.001) || (d15 - 1.0 > 0.001 || d15 - 1.0 < -0.001)) {
+    if (_lastClearMask !== 256) {
       return origUniform4(location, transpose, data, srcOffset, srcLength);
     }
 
@@ -143,20 +179,12 @@ const _installWrappers = (gl) => {
     _matBuf[8] = d8; _matBuf[9] = d9; _matBuf[10] = d10; _matBuf[11] = d11;
     _matBuf[12] = d12; _matBuf[13] = d13; _matBuf[14] = d14; _matBuf[15] = d15;
 
-    const s0 = Math.round(Math.sqrt(_matBuf[0] * _matBuf[0] + _matBuf[1] * _matBuf[1] + _matBuf[2] * _matBuf[2]) * 100);
-    const s1 = Math.round(Math.sqrt(_matBuf[4] * _matBuf[4] + _matBuf[5] * _matBuf[5] + _matBuf[6] * _matBuf[6]) * 100);
-    const s2 = Math.round(Math.sqrt(_matBuf[8] * _matBuf[8] + _matBuf[9] * _matBuf[9] + _matBuf[10] * _matBuf[10]) * 100);
-    const sig = (s0 << 20) | (s1 << 10) | s2;
+    if (_bloomCheck(_fastHash(_matBuf))) {
+      return origUniform4(location, transpose, data, srcOffset, srcLength);
+    }
 
+    const sig = _parseSig(_matBuf, 0);
     const treatAsArm = sig === TOMAHAWK_SIG ? (++_tomahawkCount > 1) : isArmSig(sig);
-
-    if (_lastClearMask !== 256) {
-      return origUniform4(location, transpose, data, srcOffset, srcLength);
-    }
-
-    if (_bloomCheck(_combineHash(sig, d12, d13, d14))) {
-      return origUniform4(location, transpose, data, srcOffset, srcLength);
-    }
 
     if (!treatAsArm) {
       const currentId = _domWeaponId || 'vita';
@@ -172,19 +200,16 @@ const _installWrappers = (gl) => {
       if (wc.colorEnabled) {
         origBindTexture(gl.TEXTURE_2D, rgbTexture);
         if (wc.rgb) {
-          const buf = hsvToRgb((performance.now() / 3000) * 360);
-          _rgbPixel[0] = buf[0]; _rgbPixel[1] = buf[1]; _rgbPixel[2] = buf[2]; _rgbPixel[3] = 255;
-          if (_rgbFrameCount++ % 3 === 0 ||
-              _rgbPixel[0] !== _lastRgbUpload[0] ||
-              _rgbPixel[1] !== _lastRgbUpload[1] ||
-              _rgbPixel[2] !== _lastRgbUpload[2]) {
-            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, _rgbPixel);
+          if (_rgbFrameCount++ % 3 === 0) {
+            const buf = hsvToRgb((performance.now() / 3000) * 360);
+            _rgbPixel[0] = buf[0]; _rgbPixel[1] = buf[1]; _rgbPixel[2] = buf[2]; _rgbPixel[3] = 255;
             _lastRgbUpload[0] = _rgbPixel[0];
             _lastRgbUpload[1] = _rgbPixel[1];
             _lastRgbUpload[2] = _rgbPixel[2];
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, _rgbPixel);
           }
         } else {
-          _parseHex(wc.colorHex, _rgbPixel);
+          _parseHexCached(wc.colorHex, _rgbPixel);
           if (_rgbPixel[0] !== _lastRgbUpload[0] ||
               _rgbPixel[1] !== _lastRgbUpload[1] ||
               _rgbPixel[2] !== _lastRgbUpload[2]) {
@@ -194,8 +219,8 @@ const _installWrappers = (gl) => {
             _lastRgbUpload[2] = _rgbPixel[2];
           }
         }
-      } else if (_lastBoundTexture) {
-        origBindTexture(gl.TEXTURE_2D, _lastBoundTexture);
+      } else {
+        origBindTexture(gl.TEXTURE_2D, _lastBoundTexture || null);
       }
 
       let scale = cfg.size || 1;

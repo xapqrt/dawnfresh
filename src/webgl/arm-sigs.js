@@ -17,12 +17,8 @@ const ARM_SIGS = new Uint32Array([
   packSig(1.54, 0.92, 2.24),
 ]);
 
-const isArmSig = (sig) => {
-  for (let i = 0; i < ARM_SIGS.length; i++) {
-    if (ARM_SIGS[i] === sig) return true;
-  }
-  return false;
-};
+const _armSigSet = new Set(ARM_SIGS);
+const isArmSig = (sig) => _armSigSet.has(sig);
 
 const TOMAHAWK_SIG = packSig(1.54, 0.92, 2.24);
 const DEFAULT_RIGHT_SIG = packSig(1.40, 1.40, 1.40);

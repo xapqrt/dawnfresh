@@ -1,9 +1,5 @@
-const _cos = new Float64Array(1);
-const _sin = new Float64Array(1);
-
 const applyZSpin = (mat, angle) => {
-  _cos[0] = Math.cos(angle); _sin[0] = Math.sin(angle);
-  const cos = _cos[0], sin = _sin[0];
+  const cos = Math.cos(angle), sin = Math.sin(angle);
   const sx = Math.sqrt(mat[0] * mat[0] + mat[1] * mat[1] + mat[2] * mat[2]);
   const sy = Math.sqrt(mat[4] * mat[4] + mat[5] * mat[5] + mat[6] * mat[6]);
   const x0 = mat[0] / sx, x1 = mat[1] / sx, x2 = mat[2] / sx;
@@ -15,8 +11,7 @@ const applyZSpin = (mat, angle) => {
 };
 
 const applyXSpin = (mat, angle) => {
-  _cos[0] = Math.cos(angle); _sin[0] = Math.sin(angle);
-  const cos = _cos[0], sin = _sin[0];
+  const cos = Math.cos(angle), sin = Math.sin(angle);
   const sy = Math.sqrt(mat[4] * mat[4] + mat[5] * mat[5] + mat[6] * mat[6]);
   const sz = Math.sqrt(mat[8] * mat[8] + mat[9] * mat[9] + mat[10] * mat[10]);
   const y0 = mat[4] / sy, y1 = mat[5] / sy, y2 = mat[6] / sy;
@@ -28,8 +23,7 @@ const applyXSpin = (mat, angle) => {
 };
 
 const applyYSpin = (mat, angle) => {
-  _cos[0] = Math.cos(angle); _sin[0] = Math.sin(angle);
-  const cos = _cos[0], sin = _sin[0];
+  const cos = Math.cos(angle), sin = Math.sin(angle);
   const sx = Math.sqrt(mat[0] * mat[0] + mat[1] * mat[1] + mat[2] * mat[2]);
   const sz = Math.sqrt(mat[8] * mat[8] + mat[9] * mat[9] + mat[10] * mat[10]);
   const x0 = mat[0] / sx, x1 = mat[1] / sx, x2 = mat[2] / sx;

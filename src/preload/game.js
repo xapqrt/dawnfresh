@@ -1,15 +1,7 @@
 const { ipcRenderer } = require("electron");
 
-require("../addons/Custom Skin Link");
-const { installBhopHook } = require("./game/bhop");
-installBhopHook();
-
 let settings = ipcRenderer.sendSync("get-settings");
 const base_url = settings.base_url;
-
-document.addEventListener("juice-settings-changed", ({ detail }) => {
-  if (detail && detail.setting !== undefined) settings[detail.setting] = detail.value;
-});
 
 if (!window.location.href.startsWith(base_url)) {
   delete window.process;
@@ -17,7 +9,10 @@ if (!window.location.href.startsWith(base_url)) {
   return;
 }
 
-const runGC = () => { if (typeof gc === "function") gc(); };
+const { installBhopHook } = require("./game/bhop");
+installBhopHook();
+require("../addons/Custom Skin Link");
+
 let _previousUrl;
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -25,12 +20,15 @@ window.addEventListener("DOMContentLoaded", () => {
   const s2 = document.createElement("style"); s2.id = "juice-styles-custom"; document.head.appendChild(s2);
   window.updateTheme = () => {
     const link = settings.css_link;
-    s1.innerHTML = (link && settings.css_enabled) ? `@import url("${link.replace(/\\/g, "/")}");` : "";
-    s2.innerHTML = settings.advanced_css || "";
+    s1.textContent = (link && settings.css_enabled) ? `@import url("${link.replace(/\\/g, "/")}");` : "";
+    s2.textContent = settings.advanced_css || "";
   };
   window.updateTheme();
 
+  let _cachedCamera = null;
+
   function findCamera(instance) {
+    if (_cachedCamera) return _cachedCamera;
     for (const key of Object.getOwnPropertyNames(instance)) {
       try {
         const val = instance[key];
@@ -45,7 +43,7 @@ window.addEventListener("DOMContentLoaded", () => {
           } catch (e) { return false; }
         });
         const hasZoom = names.includes("zoom");
-        if (hasFov && hasZoom) return val;
+        if (hasFov && hasZoom) { _cachedCamera = val; return val; }
       } catch (e) { }
     }
     return null;
@@ -54,79 +52,73 @@ window.addEventListener("DOMContentLoaded", () => {
   window.ads_power = 1;
   let _cachedPow = 1;
   let _cachedPowInput = 1;
-  let _zoomInterval = null;
 
-  const setAdsPower = (multiplier) => {
+  let _zoomInstanceResolve = null;
+  const _zoomInstanceReady = new Promise((resolve) => { _zoomInstanceResolve = resolve; });
+  let _zoomInstanceValue = window.__zoomInstance;
+  if (_zoomInstanceValue) _zoomInstanceResolve(_zoomInstanceValue);
+  Object.defineProperty(window, '__zoomInstance', {
+    get() { return _zoomInstanceValue; },
+    set(v) {
+      _zoomInstanceValue = v;
+      if (v && _zoomInstanceResolve) { _zoomInstanceResolve(v); _zoomInstanceResolve = null; }
+    },
+    configurable: true,
+    enumerable: true
+  });
+
+  const _hookCameraFov = (cam) => {
+    const fovKey = Object.getOwnPropertyNames(cam).find(key => {
+      const desc = Object.getOwnPropertyDescriptor(cam, key);
+      if (!desc?.get) return false;
+      try {
+        const val = desc.get.call(cam);
+        return typeof val === "number" && val >= 40 && val <= 150;
+      } catch (e) { return false; }
+    });
+    if (!fovKey) return false;
+
+    const desc = Object.getOwnPropertyDescriptor(cam, fovKey);
+    const origGet = desc.get;
+    const origSet = desc.set;
+
+    const defaultFov = parseFloat(localStorage.getItem("SETTINGS___SETTING/CAMERA___SETTING/MAIN_FOV___SETTING")?.replace(/"/g, "")) || 100;
+    let ads = false;
+
+    Object.defineProperty(cam, fovKey, {
+      get() { return origGet.call(this); },
+      set(v) {
+        if (v === defaultFov) { ads = false; origSet.call(this, v); return; }
+        if (v < defaultFov) ads = true;
+        if (ads) {
+          const weaponConfig = window.dawnWeaponConfig;
+          let adsPower = _cachedPowInput;
+          if (weaponConfig) {
+            const weaponId = weaponConfig.universalModeActive ? "universal" : (window.currentWeaponId || "vita");
+            const cfg = weaponConfig.getSettings(weaponId);
+            adsPower = cfg.adsPower ?? _cachedPowInput;
+          }
+          const curved = adsPower === _cachedPowInput ? _cachedPow : Math.pow(adsPower, 0.4);
+          const zoomDelta = Math.abs(defaultFov - v);
+          origSet.call(this, Math.max(1, Math.min(179, defaultFov - zoomDelta * curved)));
+        } else {
+          origSet.call(this, v);
+        }
+      },
+      configurable: true,
+      enumerable: true
+    });
+    return true;
+  };
+
+  const setAdsPower = async (multiplier) => {
     window.ads_power = multiplier;
     _cachedPow = Math.pow(multiplier, 0.4);
     _cachedPowInput = multiplier;
 
-    if (_zoomInterval !== null) {
-      clearInterval(_zoomInterval);
-      _zoomInterval = null;
-    }
-
-    _zoomInterval = setInterval(() => {
-      if (!window.__zoomInstance) return;
-      const cam = findCamera(window.__zoomInstance);
-      if (!cam) return;
-      clearInterval(_zoomInterval);
-      _zoomInterval = null;
-
-      const fovKey = Object.getOwnPropertyNames(cam).find(key => {
-        const desc = Object.getOwnPropertyDescriptor(cam, key);
-        if (!desc?.get) return false;
-        try {
-          const val = desc.get.call(cam);
-          return typeof val === "number" && val >= 40 && val <= 150;
-        } catch (e) { return false; }
-      });
-
-      if (!fovKey) return;
-
-      const desc = Object.getOwnPropertyDescriptor(cam, fovKey);
-      const origGet = desc.get;
-      const origSet = desc.set;
-
-      const defaultFov = parseFloat(localStorage.getItem("SETTINGS___SETTING/CAMERA___SETTING/MAIN_FOV___SETTING")?.replace(/"/g, "")) || 100;
-
-      let ads = false;
-
-      Object.defineProperty(cam, fovKey, {
-        get() { return origGet.call(this); },
-        set(v) {
-          if (v === defaultFov) {
-            ads = false;
-            origSet.call(this, v);
-            return;
-          }
-
-          if (v < defaultFov) {
-            ads = true;
-          }
-
-          if (ads) {
-            const weaponConfig = window.dawnWeaponConfig;
-            let adsPower = _cachedPowInput;
-
-            if (weaponConfig) {
-              const weaponId = weaponConfig.universalModeActive ? "universal" : (window.currentWeaponId || "vita");
-              const cfg = weaponConfig.getSettings(weaponId);
-              adsPower = cfg.adsPower ?? _cachedPowInput;
-            }
-
-            const curved = adsPower === _cachedPowInput ? _cachedPow : Math.pow(adsPower, 0.4);
-            const zoomDelta = Math.abs(defaultFov - v);
-            const newFov = defaultFov - zoomDelta * curved;
-            origSet.call(this, Math.max(1, Math.min(179, newFov)));
-          } else {
-            origSet.call(this, v);
-          }
-        },
-        configurable: true,
-        enumerable: true
-      });
-    }, 100);
+    const instance = await _zoomInstanceReady;
+    const cam = findCamera(instance);
+    if (cam) _hookCameraFov(cam);
   };
 
   document.addEventListener("juice-settings-changed", ({ detail }) => {
@@ -149,14 +141,6 @@ window.addEventListener("DOMContentLoaded", () => {
       setAdsPower(settings.ads_power);
     }
 
-    const inGame = url.startsWith(`${base_url}games`) || url.startsWith(`${base_url}hub/ranked`);
-    const wasInGame = _previousUrl && (_previousUrl.startsWith(`${base_url}games`) || _previousUrl.startsWith(`${base_url}hub/ranked`));
-
-    if (inGame && !wasInGame) {
-      runGC();
-    } else if (!inGame && wasInGame) {
-      runGC();
-    }
     _previousUrl = url;
   });
 
@@ -164,7 +148,6 @@ window.addEventListener("DOMContentLoaded", () => {
     const url = window.location.href;
     if (url.startsWith(`${base_url}games`) || url.startsWith(`${base_url}hub/ranked`)) {
       setAdsPower(settings.ads_power);
-      runGC();
     }
     _previousUrl = url;
   };

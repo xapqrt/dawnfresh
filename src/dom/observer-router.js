@@ -1,23 +1,42 @@
+const { createThrottledObserver } = require("./raf-throttle");
+
 const _handlers = new Map();
 let _mainObserver = null;
 let _isActive = false;
 
-const observeForElement = (selector, functionToRun, target = document.body) => {
-  const observer = new MutationObserver((mutations, obs) => {
-    for (const mutation of mutations) {
-      if (mutation.type === "childList" && mutation.addedNodes.length > 0) {
-        mutation.addedNodes.forEach(node => {
-          if (node.nodeType === Node.ELEMENT_NODE) {
-            if (node.matches(selector)) {
-              functionToRun(node);
-            } else {
-              const inner = node.querySelector(selector);
-              if (inner) functionToRun(inner);
-            }
-          }
-        });
-      }
+let _rafBatchQueued = false;
+let _rafBatchPending = null;
+
+const _rafBatch = (fn) => {
+  if (_rafBatchQueued) { _rafBatchPending = fn; return; }
+  _rafBatchQueued = true;
+  requestAnimationFrame(() => {
+    _rafBatchQueued = false;
+    fn();
+    if (_rafBatchPending) {
+      const next = _rafBatchPending;
+      _rafBatchPending = null;
+      next();
     }
+  });
+};
+
+const observeForElement = (selector, functionToRun, target = document.body) => {
+  const observer = createThrottledObserver((mutations, obs) => {
+    _rafBatch(() => {
+      for (const mutation of mutations) {
+        if (mutation.type !== 'childList' || !mutation.addedNodes.length) continue;
+        for (let i = 0; i < mutation.addedNodes.length; i++) {
+          const node = mutation.addedNodes[i];
+          if (node.nodeType !== Node.ELEMENT_NODE) continue;
+          if (node.matches && node.matches(selector)) { functionToRun(node); continue; }
+          if (node.querySelector) {
+            const inner = node.querySelector(selector);
+            if (inner) functionToRun(inner);
+          }
+        }
+      }
+    });
   });
   observer.observe(target, { childList: true, subtree: true });
   return observer;
@@ -44,28 +63,41 @@ const unregister = (selector, callback) => {
   }
 };
 
+const dispatchNode = (node) => {
+  for (const [selector, callbacks] of _handlers) {
+    if (node.matches && node.matches(selector)) {
+      for (let j = 0; j < callbacks.length; j++) callbacks[j](node);
+    }
+  }
+};
+
 const start = (target = document.body) => {
   if (_mainObserver) stop();
 
-  const observer = new MutationObserver((mutations) => {
+  const observer = createThrottledObserver((mutations) => {
     if (_handlers.size === 0) return;
-    for (const mutation of mutations) {
-      if (mutation.type !== 'childList' || !mutation.addedNodes.length) continue;
-      for (let i = 0; i < mutation.addedNodes.length; i++) {
-        const node = mutation.addedNodes[i];
-        if (node.nodeType !== Node.ELEMENT_NODE) continue;
-        for (const [selector, callbacks] of _handlers) {
-          if (node.matches && node.matches(selector)) {
-            for (let j = 0; j < callbacks.length; j++) callbacks[j](node);
-          } else if (node.querySelector) {
-            const inner = node.querySelector(selector);
-            if (inner) {
-              for (let j = 0; j < callbacks.length; j++) callbacks[j](inner);
+    _rafBatch(() => {
+      const selectors = [..._handlers.keys()];
+      const selectorStr = selectors.join(',');
+      if (!selectorStr) return;
+      const seen = new Set();
+      for (const mutation of mutations) {
+        if (mutation.type !== 'childList' || !mutation.addedNodes.length) continue;
+        for (let i = 0; i < mutation.addedNodes.length; i++) {
+          const node = mutation.addedNodes[i];
+          if (node.nodeType !== Node.ELEMENT_NODE) continue;
+          if (node.matches && node.matches(selectorStr)) {
+            if (!seen.has(node)) { seen.add(node); dispatchNode(node); }
+          }
+          if (node.querySelectorAll) {
+            const matches = node.querySelectorAll(selectorStr);
+            for (let m = 0; m < matches.length; m++) {
+              if (!seen.has(matches[m])) { seen.add(matches[m]); dispatchNode(matches[m]); }
             }
           }
         }
       }
-    }
+    });
   });
 
   observer.observe(target, { childList: true, subtree: true });

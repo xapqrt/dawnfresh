@@ -73,7 +73,7 @@ const handleClose = () =>
       initGame();
       splashWindow.close();
     }
-  }, 500);
+  }, 100);
 
 const initSplash = createWindow;
 

@@ -4,16 +4,11 @@ const dns = require("dns");
 const os = require("os");
 const fs = require("fs");
 const path = require("path");
-const { execSync } = require("child_process");
 const { applySwitches } = require("./util/switches");
 const { default_settings } = require("./util/defaults.json");
 
 // Boost process priority to reduce input/render latency
-try { execSync(`renice -20 ${process.pid} 2>/dev/null`); } catch (e) {}
-try { os.setPriority(process.pid, -20); } catch (e) {}
-if (process.platform === "darwin") {
-  try { execSync(`taskpolicy -N -p ${process.pid} 2>/dev/null || true`); } catch (e) {}
-}
+try { os.setPriority(process.pid, -10); } catch (e) {}
 
 // Read settings early so we can apply command-line switches BEFORE app.ready
 let settings = default_settings;
@@ -47,8 +42,6 @@ const preResolve = [
 ];
 for (const d of preResolve) {
   dns.resolve(d, () => {});
-  dns.resolve4(d, () => {});
-  dns.resolve6(d, () => {});
 }
 
 app.on("ready", async () => {

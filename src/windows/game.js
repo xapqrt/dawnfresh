@@ -45,9 +45,14 @@ ipcMain.on("get-settings", (e) => {
   e.returnValue = settings;
 });
 
+let _storeTimer = null;
 ipcMain.on("update-setting", (e, key, value) => {
   settings[key] = value;
-  store.set("settings", settings);
+  if (_storeTimer) clearTimeout(_storeTimer);
+  _storeTimer = setTimeout(() => {
+    _storeTimer = null;
+    store.set("settings", settings);
+  }, 150);
 });
 
 ipcMain.on("navigate", (_, url) => {
@@ -92,6 +97,7 @@ const createWindow = () => {
       sandbox: false,
       webSecurity: false,
       backgroundThrottling: false,
+      paintWhenInitiallyHidden: true,
       v8CacheOptions: 'bypassHeatCheckAndEagerCompile',
       disableBlinkFeatures: 'SmoothScrolling,TouchEvent,Vibration,WebShare,WebBluetooth,WebUSB,WebMIDI,Presentation,Notifications,CSSAnimationWorklet,ScrollTimeline,SharedWorker,FontSrcLocal,WebAppBanner,InfiniteScroll,IdleDetection,Serial,WebNFC,WebHID,WakeLock,FileSystemAccess',
       preload: path.join(__dirname, "../preload/game.js"),
@@ -105,7 +111,7 @@ const createWindow = () => {
   }
 
   gameWindow.webContents.setUserAgent(
-    `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.7204.96 Safari/537.36 Electron/10.4.7 DawnClient/${app.getVersion()}`
+    `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.121 Safari/537.36 Electron/10.4.7 DawnClient/${app.getVersion()}`
   );
 
   gameWindow.webContents.on("new-window", (e, url) => {
@@ -124,6 +130,8 @@ const createWindow = () => {
   gameWindow.once("ready-to-show", () => {
     gameWindow.show();
   });
+
+  gameWindow.webContents.setFrameRate(450);
 
   gameWindow.on("page-title-updated", (e) => e.preventDefault());
 
@@ -154,20 +162,20 @@ const initGame = () => {
   const swap = initResourceSwapper();
 
   const bundleFilter = { urls: ['*://kirka.io/assets/js/app.*.js'] };
-  const allUrls = [...(swap.filter.urls.length ? swap.filter.urls : []), ...bundleFilter.urls];
+  const allUrls = swap.filter.urls.length
+    ? [...bundleFilter.urls, ...swap.filter.urls]
+    : bundleFilter.urls;
 
   session.defaultSession.webRequest.onBeforeRequest(
     { urls: allUrls },
     (details, callback) => {
-      if (/kirka\.io\/assets\/js\/app\.[^/]+\.js/.test(details.url)) {
+      if (/kirka\.io\/assets\/js\/app\.\w+\.js/.test(details.url)) {
         return callback({ redirectURL: 'dawn-patch://bundle/app.js?url=' + encodeURIComponent(details.url) });
       }
 
       if (swap.filter.urls.length) {
-        const redirect =
-          'dawnclient://' +
-          (swap.files[details.url.replace(/https|http|(\?.*)|(#.*)|\_/gi, '')] ||
-            details.url);
+        const cleaned = details.url.replace(/https?:\/\//, '').replace(/\?.*/, '').replace(/#.*/, '').replace(/_/g, '');
+        const redirect = 'dawnclient://' + (swap.files[cleaned] || details.url);
         return callback({ cancel: false, redirectURL: redirect });
       }
 

@@ -72,16 +72,18 @@ async function executeCardScript(customcardlist) {
     DEFAULT: "ffffff",
   };
 
-  let translations_req = await fetch(
-    `https://raw.githubusercontent.com/${git_base}/KirkaScripts/refs/heads/main/ConsoleScripts/microwaves.json`,
-  );
-  let translations = await translations_req.json();
-
-  //This Part reverses my translations
-  Object.keys(translations).forEach((item) => {
-    let translationItem = translations[item];
-    translations[translationItem] = item;
-  });
+  if (!window.__openerTranslations) {
+    let translations_req = await fetch(
+      `https://raw.githubusercontent.com/${git_base}/KirkaScripts/refs/heads/main/ConsoleScripts/microwaves.json`,
+    );
+    let translations = await translations_req.json();
+    Object.keys(translations).forEach((item) => {
+      let translationItem = translations[item];
+      translations[translationItem] = item;
+    });
+    window.__openerTranslations = translations;
+  }
+  let translations = window.__openerTranslations;
 
   //This code logs credits
   function logCredits() {
@@ -416,19 +418,19 @@ async function executeCardScript(customcardlist) {
   cardskipper = processCardskipper(cardskipper, inventory);
 
   if (!document.getElementById("konfettijs")) {
-    let script = document.createElement("script");
-    script.id = "konfettijs";
-    script.src =
-      "https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js";
-    document.head.appendChild(script);
+    requestIdleCallback(() => {
+      let script = document.createElement("script");
+      script.id = "konfettijs";
+      script.src =
+        "https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js";
+      document.head.appendChild(script);
+    });
   }
 
   let openedItems = {};
   let counter = 0;
   let interval = setInterval(async () => {
     let cardresult = await openCard(cards[counter]["cardid"]);
-    let resultName = cardresult[translations["name"]];
-    let resultRarity = cardresult[translations["rarity"]];
     if (resultName) {
       ingameShowcase(resultName, resultRarity, cards[counter]["name"]);
 
@@ -514,16 +516,18 @@ async function executeChestScript(customchestlist) {
     DEFAULT: "ffffff",
   };
 
-  let translations_req = await fetch(
-    `https://raw.githubusercontent.com/${git_base}/KirkaScripts/refs/heads/main/ConsoleScripts/microwaves.json`,
-  );
-  let translations = await translations_req.json();
-
-  //This Part reverses my translations
-  Object.keys(translations).forEach((item) => {
-    let translationItem = translations[item];
-    translations[translationItem] = item;
-  });
+  if (!window.__openerTranslations) {
+    let translations_req = await fetch(
+      `https://raw.githubusercontent.com/${git_base}/KirkaScripts/refs/heads/main/ConsoleScripts/microwaves.json`,
+    );
+    let translations = await translations_req.json();
+    Object.keys(translations).forEach((item) => {
+      let translationItem = translations[item];
+      translations[translationItem] = item;
+    });
+    window.__openerTranslations = translations;
+  }
+  let translations = window.__openerTranslations;
 
   //This code logs credits
   function logCredits() {
@@ -555,12 +559,15 @@ async function executeChestScript(customchestlist) {
   }
 
   let bvl = [];
+  let _bvlCache = null;
 
   async function setBVL() {
+    if (_bvlCache) { bvl = _bvlCache; return; }
     let response = await fetch(
       "https://opensheet.elk.sh/1tzHjKpu2gYlHoCePjp6bFbKBGvZpwDjiRzT9ZUfNwbY/Alphabetical",
     );
     bvl = await response.json();
+    _bvlCache = bvl;
     return;
   }
 
@@ -856,11 +863,13 @@ async function executeChestScript(customchestlist) {
   chestskipper = processChestskipper(chestskipper, inventory);
 
   if (!document.getElementById("konfettijs")) {
-    let script = document.createElement("script");
-    script.id = "konfettijs";
-    script.src =
-      "https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js";
-    document.head.appendChild(script);
+    requestIdleCallback(() => {
+      let script = document.createElement("script");
+      script.id = "konfettijs";
+      script.src =
+        "https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js";
+      document.head.appendChild(script);
+    });
   }
 
   let openedItems = {};
@@ -934,36 +943,33 @@ async function opener() {
   if (!select) return;
 
   const data = await fetchOpenerList();
+  let _openerRunning = false;
 
   select.addEventListener("change", async () => {
+    if (_openerRunning) return;
     const value = select.value;
 
     if (value === "none") return;
 
-    if (value === "Chest_All") {
-      return start_chests_input(data.chests);
-    }
-
-    if (value.startsWith("Chest_")) {
-      const name = value.replace("Chest_", "");
-      const chest = data.chests.find((c) => c.name === name);
-      if (chest) {
-        return start_chests_input([chest]);
+    _openerRunning = true;
+    try {
+      if (value === "Chest_All") {
+        await start_chests_input(data.chests);
+      } else if (value.startsWith("Chest_")) {
+        const name = value.replace("Chest_", "");
+        const chest = data.chests.find((c) => c.name === name);
+        if (chest) await start_chests_input([chest]);
+      } else if (value === "Card_All") {
+        await start_cards_input(data.cards);
+      } else if (value.startsWith("Card_")) {
+        const name = value.replace("Card_", "");
+        const card = data.cards.find(
+          (c) => c.name.replace(/\s+/g, "") === name,
+        );
+        if (card) await start_cards_input([card]);
       }
-    }
-
-    if (value === "Card_All") {
-      return start_cards_input(data.cards);
-    }
-
-    if (value.startsWith("Card_")) {
-      const name = value.replace("Card_", "");
-      const card = data.cards.find(
-        (c) => c.name.replace(/\s+/g, "") === name,
-      );
-      if (card) {
-        return start_cards_input([card]);
-      }
+    } finally {
+      _openerRunning = false;
     }
   });
 }

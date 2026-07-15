@@ -39,6 +39,11 @@ function rafThrottleMO(cb) {
   };
 }
 
+function createThrottledObserver(cb) {
+  const wrapped = rafThrottleMO(cb);
+  return new window.MutationObserver(wrapped);
+}
+
 function patchMutationObserverGlobal(cleanupFn) {
   const OrigMO = window.MutationObserver;
   window.MutationObserver = function (cb) {
@@ -50,4 +55,4 @@ function patchMutationObserverGlobal(cleanupFn) {
   window.MutationObserver.prototype = OrigMO.prototype;
 }
 
-module.exports = { rafThrottle, rafThrottleMO, patchMutationObserverGlobal };
+module.exports = { rafThrottle, rafThrottleMO, createThrottledObserver, patchMutationObserverGlobal };

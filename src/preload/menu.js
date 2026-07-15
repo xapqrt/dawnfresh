@@ -1,10 +1,10 @@
-const { ipcRenderer } = require("electron");
+const { ipcRenderer, clipboard } = require("electron");
 const fs = require("fs");
 const path = require("path");
 const { version } = require("../../package.json");
 const { addOpenerList } = require("../addons/opener");
 const { initBrowser } = require("../addons/browser");
-const { clipboard } = require("electron");
+const { createThrottledObserver } = require("../dom/raf-throttle");
 
 class Menu {
   constructor() {
@@ -774,8 +774,11 @@ class Menu {
   }
 
   saveWeaponSettings() {
-    localStorage.setItem("dawn_weapon_config", JSON.stringify(this.weaponSettings));
-    this.updateGlobalWeaponConfig();
+    if (this._wsTimer) clearTimeout(this._wsTimer);
+    this._wsTimer = setTimeout(() => {
+      localStorage.setItem("dawn_weapon_config", JSON.stringify(this.weaponSettings));
+      this.updateGlobalWeaponConfig();
+    }, 200);
   }
 
   setVersion() {
@@ -1306,12 +1309,17 @@ class Menu {
 
         trash.addEventListener("click", () => { div.remove(); updateGradient(); });
 
+        let _hexRaf = null;
         hexInput.addEventListener("input", () => {
-          if (/^#[0-9A-Fa-f]{6}$/.test(hexInput.value)) {
-            colorPicker.value = hexInput.value;
-            swatch.style.background = hexInput.value;
-            updateGradient();
-          }
+          if (_hexRaf) return;
+          _hexRaf = requestAnimationFrame(() => {
+            _hexRaf = null;
+            if (/^#[0-9A-Fa-f]{6}$/.test(hexInput.value)) {
+              colorPicker.value = hexInput.value;
+              swatch.style.background = hexInput.value;
+              updateGradient();
+            }
+          });
         });
 
         colorPicker.addEventListener("input", () => {
@@ -1735,14 +1743,14 @@ class Menu {
 
   handleKeyEvents() {
     document.addEventListener("keydown", (e) => {
-      if (e.code === this.settings.menu_keybind) {
-        const isActive = this.menuToggle.getAttribute("data-active") === "true";
-        if (!isActive) {
-          document.exitPointerLock();
-        }
-        this.menuToggle.setAttribute("data-active", !isActive);
-        this.localStorage.setItem("juice-menu", !isActive);
+      if (e.code !== this.settings.menu_keybind) return;
+      if (window.location.href.includes('/games/')) return;
+      const isActive = this.menuToggle.getAttribute("data-active") === "true";
+      if (!isActive) {
+        document.exitPointerLock();
       }
+      this.menuToggle.setAttribute("data-active", !isActive);
+      this.localStorage.setItem("juice-menu", !isActive);
     });
   }
 
@@ -1919,10 +1927,6 @@ class Menu {
       {
         slider: document.getElementById("arm_offset_y"),
         input: document.querySelector(".arm-offset-y-value"),
-      },
-      {
-        slider: document.getElementById("arm_offset_z"),
-        input: document.querySelector(".arm-offset-z-value"),
       },
       {
         slider: document.getElementById("arm_offset_z"),
@@ -2509,15 +2513,8 @@ class Menu {
 
     const highlightSelectedTrade = () => {
       if (!selectedTradeId) return;
-
-      const trades = document.querySelectorAll(".servers .trade");
-      trades.forEach((trade) => {
-        const text = trade.innerText;
-        const match = text.match(/\/trade accept (\d+)/);
-        if (match && match[1] === selectedTradeId) {
-          trade.classList.add("selected");
-        }
-      });
+      const trade = document.querySelector(`.servers .trade[data-trade-id="${selectedTradeId}"]`);
+      if (trade) trade.classList.add("selected");
     };
 
     const observeChat = () => {
@@ -2529,7 +2526,7 @@ class Menu {
       const chatContainer = document.querySelector(".servers .chat");
       if (!chatContainer) return;
 
-      const observer = new MutationObserver(() => {
+      const observer = createThrottledObserver(() => {
         highlightSelectedTrade();
       });
 
@@ -2542,6 +2539,10 @@ class Menu {
     };
 
     const bodyCheckInterval = setInterval(() => {
+      if (document.hidden) return;
+      const href = window.location.href;
+      if (href.includes('/games/') || href.includes('/hub/ranked')) return;
+
       const chatContainer = document.querySelector(".servers .chat");
 
       if (chatContainer && !chatObserver) {
@@ -2552,7 +2553,11 @@ class Menu {
       }
     }, 500);
 
-    document.addEventListener("click", async (e) => {
+    const _clickHandler = async (e) => {
+      if (document.hidden) return;
+      const href = window.location.href;
+      if (href.includes('/games/') || href.includes('/hub/ranked')) return;
+
       if (this.settings.accept_on_click) {
         const tradeElem = e.target.closest(".servers .trade");
         const tradeButtonElem = e.target.closest(".servers .trade .button");
@@ -2566,6 +2571,7 @@ class Menu {
 
         const tradeId = match[1];
         selectedTradeId = tradeId;
+        tradeElem.dataset.tradeId = tradeId;
 
         tradeElem.classList.add("selected");
 
@@ -2580,7 +2586,9 @@ class Menu {
         input.value = "/trade confirm";
         input.dispatchEvent(new Event("input", { bubbles: true }));
       }
-    });
+    };
+
+    document.addEventListener("click", _clickHandler);
 
     const openSwapperFolder = this.menu.querySelector("#open-swapper-folder");
     openSwapperFolder.addEventListener("click", () => {

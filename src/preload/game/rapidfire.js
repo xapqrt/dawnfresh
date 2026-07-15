@@ -19,6 +19,7 @@ function installRapidFire(settings) {
 
   function loop() {
     if (!_active) return;
+    if (document.hidden) { _rafId = requestAnimationFrame(loop); return; }
     sendMouse(false);
     sendMouse(true);
     _rafId = requestAnimationFrame(loop);

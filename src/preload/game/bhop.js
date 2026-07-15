@@ -3,8 +3,7 @@ function installBhopHook() {
   var _qDown = false;
   var _bhopOn = false;
   var _qDownPhys = false;
-  var _timeoutId = null;
-  var _tickCount = 0;
+  var _rAFId = null;
   var _phase = 0;
 
   var DOWN_TICKS = 1;
@@ -31,29 +30,38 @@ function installBhopHook() {
       (el.getAttribute && el.getAttribute("role") === "textbox");
   }
 
-  function _tick() {
-    if (!_bhopOn) { _timeoutId = null; return; }
-    _tickCount++;
-    if (_phase === 1 && _tickCount >= DOWN_TICKS) {
-      _qDownPhys = false; _postQ(false); _phase = 2; _tickCount = 0;
-    } else if (_phase === 2 && _tickCount >= UP_TICKS) {
-      _qDownPhys = true; _postQ(true); _phase = 1; _tickCount = 0;
+  var _lastTick = 0;
+  var _rAFCount = 0;
+  var _tickInterval = 3;
+
+  function _tick(now) {
+    if (!_bhopOn) { _rAFId = null; return; }
+    if (document.hidden) { _rAFId = requestAnimationFrame(_tick); return; }
+    _rAFCount++;
+    if (_rAFCount < _tickInterval) { _rAFId = requestAnimationFrame(_tick); return; }
+    _rAFCount = 0;
+
+    if (_phase === 1) {
+      _qDownPhys = false; _postQ(false); _phase = 2;
+    } else if (_phase === 2) {
+      _qDownPhys = true; _postQ(true); _phase = 1;
     }
-    _timeoutId = setTimeout(_tick, 0);
+    _rAFId = requestAnimationFrame(_tick);
   }
 
   function _start() {
     if (_bhopOn) return;
     _bhopOn = true;
-    _tickCount = 0;
+    _rAFCount = 0;
+    _tickInterval = 3;
     _phase = 1; _qDownPhys = true; _postQ(true);
-    _timeoutId = setTimeout(_tick, 0);
+    _rAFId = requestAnimationFrame(_tick);
   }
 
   function _stop() {
     if (!_bhopOn) return;
     _bhopOn = false;
-    if (_timeoutId !== null) { clearTimeout(_timeoutId); _timeoutId = null; }
+    if (_rAFId !== null) { cancelAnimationFrame(_rAFId); _rAFId = null; }
     if (_qDownPhys) { _qDownPhys = false; _postQ(false); }
     _phase = 0;
   }
