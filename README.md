@@ -22,6 +22,10 @@
 
 </div>
 
+## Performance Baseline
+
+This branch keeps the current Electron 10 runtime and focuses on local performance work only. The goal is to reduce client overhead on Apple Silicon without changing the app framework or widening the platform target.
+
 ## Download
 
 Head to the [**Releases**](https://github.com/zVipexx/dawn-client/releases) page to grab the latest installer for Windows, macOS, or Linux.
