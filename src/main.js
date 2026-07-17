@@ -6,6 +6,7 @@ applySwitches();
 
 app.on("ready", async () => {
   initSplash();
+  try { require("os").setPriority(process.pid, -10); } catch (e) {}
 });
 
 app.on("window-all-closed", () => app.quit());
