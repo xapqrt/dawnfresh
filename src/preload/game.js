@@ -14,25 +14,13 @@ if (!window.location.href.startsWith(base_url)) {
 
 const { installBhopHook } = require("./game/bhop");
 
-const makeShouldTick = () => {
-  let last = 0;
-  const MIN_MS = 1000 / 244;
-  return (now) => {
-    const d = now - last;
-    if (d < MIN_MS) return false;
-    last = now;
-    return true;
-  };
-};
-
-installBhopHook(makeShouldTick());
+installBhopHook();
 require("../addons/Custom Skin Link");
 
 const installFpsOverlay = () => {
   let enabled = false;
   let rafId = null;
   let lastTime = performance.now();
-  const capTick = makeShouldTick();
   const RING = 60;
   const ring = new Float64Array(RING);
   let idx = 0;
@@ -60,7 +48,6 @@ const installFpsOverlay = () => {
   };
 
   const tick = (now) => {
-    if (!capTick(now)) { rafId = requestAnimationFrame(tick); return; }
     const delta = now - lastTime;
     lastTime = now;
     if (filled === RING) sum -= ring[idx];

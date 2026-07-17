@@ -3,6 +3,7 @@ const { applyZSpin, applyXSpin, applyYSpin, hsvToRgb } = require('./mat-utils');
 const wasm = require('../wasm/dawn_wasm');
 
 const _matBuf = wasm.getScratchBuf();
+const _matBufI32 = new Int32Array(_matBuf.buffer, _matBuf.byteOffset, _matBuf.length);
 const _rgbPixel = new Uint8Array(4);
 
 let _lastDrawCall = -1;
@@ -28,7 +29,10 @@ const _bloomCheck = (hash) => {
   return false;
 };
 
-const _fastHash = () => wasm.fastHash(0);
+const _fastHash = () => {
+  const i32 = _matBufI32;
+  return (i32[0] ^ i32[5] ^ i32[10] ^ i32[15]) >>> 0;
+};
 
 const INSPECT_DURATIONS = {
   vita: 600, rev: 550, mac10: 800, ar9: 550, m60: 550,
