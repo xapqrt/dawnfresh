@@ -5,6 +5,7 @@ const path = require("path");
 function applySwitches() {
   let unlimited_fps = false;
   let in_process_gpu = false;
+  let use_angle_opengl = false;
   try {
     const configPath = path.join(app.getPath("userData"), "config.json");
     if (fs.existsSync(configPath)) {
@@ -12,9 +13,14 @@ function applySwitches() {
       if (stored && stored.settings) {
         unlimited_fps = !!stored.settings.unlimited_fps;
         in_process_gpu = !!stored.settings.in_process_gpu;
+        use_angle_opengl = !!stored.settings.use_angle_opengl;
       }
     }
   } catch (e) {}
+
+  if (use_angle_opengl) {
+    app.commandLine.appendSwitch("use-angle", "opengl");
+  }
 
   if (unlimited_fps) {
     app.commandLine.appendSwitch("disable-frame-rate-limit");
