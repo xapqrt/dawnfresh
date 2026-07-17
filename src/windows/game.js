@@ -126,7 +126,17 @@ const createWindow = () => {
   gameWindow.loadURL(settings.base_url);
   gameWindow.maximize();
 
+  const showFallback = setTimeout(() => {
+    if (gameWindow && !gameWindow.isVisible()) {
+      if (process.platform === "darwin" && settings.auto_fullscreen) {
+        gameWindow.setFullScreen(true);
+      }
+      gameWindow.show();
+    }
+  }, 10000);
+
   gameWindow.once("ready-to-show", () => {
+    clearTimeout(showFallback);
     if (process.platform === "darwin" && settings.auto_fullscreen) {
       gameWindow.setFullScreen(true);
     }

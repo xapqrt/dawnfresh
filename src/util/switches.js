@@ -25,7 +25,10 @@ function applySwitches() {
   app.commandLine.appendSwitch("ignore-gpu-blocklist");
   app.commandLine.appendSwitch("enable-gpu-rasterization");
   app.commandLine.appendSwitch("enable-zero-copy");
-  app.commandLine.appendSwitch("disable-software-rasterizer");
+  // NOTE: removed disable-software-rasterizer — this blocked SwiftShader compositor
+  // fallback on Apple Silicon when the Metal GPU surface fails, causing the "blue
+  // screen / stuck on splash" bug on M4. Without this flag, the compositor falls
+  // back to software tiles while WebGL keeps hardware GPU acceleration.
   // NOTE: removed enable-native-gpu-memory-buffers, enable-accelerated-2d-canvas,
   // CanvasOop, MetalOnlyGraphics, force-gpu-mem-available-mb — these destabilized
   // the GPU process (surface-creation failures -> GPU crash) on Electron 12 / Apple Silicon.
