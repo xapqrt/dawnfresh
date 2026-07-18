@@ -11,11 +11,12 @@ applySwitches();
 app.on("ready", async () => {
   initSplash();
   try { require("os").setPriority(process.pid, -10); } catch (e) {}
-  globalShortcut.register("ShiftRight", () => {
+  globalShortcut.register("F8", () => {
     const gw = getGameWindow();
     if (gw && !gw.isDestroyed()) gw.webContents.send("toggle-menu");
   });
-  globalShortcut.register("F8", () => {
+  console.log("[menu] F8 registered:", globalShortcut.isRegistered("F8"));
+  globalShortcut.register("Shift+F8", () => {
     const gw = getGameWindow();
     if (gw && !gw.isDestroyed()) gw.webContents.send("toggle-menu");
   });

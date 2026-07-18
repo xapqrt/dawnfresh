@@ -1744,6 +1744,7 @@ class Menu {
   }
 
   _toggleMenu() {
+    const fs=require("fs"); try { fs.appendFileSync(require("os").homedir()+"/menu-debug.log", "toggle "+Date.now()+" active="+(this.menuToggle.getAttribute("data-active")==="true"?"was-open":"was-closed")+"\n"); } catch(e){}
     const isActive = this.menuToggle.getAttribute("data-active") === "true";
     if (!isActive) {
       try { document.exitPointerLock(); } catch (e) {}
