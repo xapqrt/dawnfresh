@@ -144,6 +144,7 @@ const createWindow = () => {
       webviewTag: true,
       sandbox: false,
       webSecurity: false,
+      nativeWindowOpen: true,
       preload: path.join(__dirname, "../preload/game.js"),
     },
   });
@@ -152,9 +153,38 @@ const createWindow = () => {
     `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.7204.296 Safari/537.36 Electron/10.4.7 DawnClient/${app.getVersion()}`
   );
 
-  gameWindow.webContents.on("new-window", (e, url) => {
-    e.preventDefault();
-    require("electron").shell.openExternal(url);
+  // Google / OAuth popups (window.open) must open IN-APP as real child windows
+  // so the window.opener relationship + postMessage round-trip works and the
+  // login callback returns to the game. Routing them to the system browser
+  // (shell.openExternal) breaks OAuth because the redirect can't come back.
+  // nativeWindowOpen:true makes Electron create native child popups when we
+  // return action:'allow'.
+  gameWindow.webContents.setWindowOpenHandler(({ url, frameName, features }) => {
+    const u = String(url || "");
+    const isAuth = /(accounts\.google\.com|googleapis\.com|oauth|login|auth|signin|facebook|discord|appleid\.com)/i.test(u);
+    if (isAuth) {
+      // Open as an in-app child window so the OAuth flow completes and posts
+      // the result back to the parent game window.
+      return {
+        action: "allow",
+        overrideBrowserWindowOptions: {
+          titleBarStyle: "hidden",
+          fullscreenable: false,
+          width: 480,
+          height: 640,
+          backgroundColor: "#141414",
+          webPreferences: {
+            nodeIntegration: false,
+            contextIsolation: true,
+            sandbox: true,
+            webSecurity: true,
+          },
+        },
+      };
+    }
+    // Non-auth links: open in the default browser.
+    if (u && /^https?:\/\//.test(u)) require("electron").shell.openExternal(u);
+    return { action: "deny" };
   });
 
   gameWindow.webContents.on("did-navigate-in-page", (e, url) => {
