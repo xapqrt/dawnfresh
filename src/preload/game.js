@@ -13,8 +13,10 @@ if (!window.location.href.startsWith(base_url)) {
 }
 
 const { installBhopHook } = require("./game/bhop");
+const { installRecorder } = require("./game/recorder");
 
 installBhopHook();
+installRecorder();
 require("../addons/Custom Skin Link");
 
 const installFpsOverlay = () => {

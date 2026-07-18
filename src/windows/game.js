@@ -64,6 +64,14 @@ ipcMain.on("navigate", (_, url) => {
   gameWindow.loadURL(url);
 });
 
+ipcMain.on("save-recording", (_, buf) => {
+  const clipsDir = path.join(app.getPath("documents"), "DawnClient", "clips");
+  if (!fs.existsSync(clipsDir)) { fs.mkdirSync(clipsDir, { recursive: true }); }
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  const filePath = path.join(clipsDir, `clip-${ts}.webm`);
+  fs.writeFile(filePath, Buffer.from(buf), () => {});
+});
+
 ipcMain.on("reset-juice-settings", () => {
   store.set("settings", default_settings);
   app.relaunch();
@@ -98,7 +106,7 @@ ipcMain.on('dawn-bhop-key', (_, { type, keyCode, code, key }) => {
       console.warn('[bhop] CDP sendCommand failed:', e.message);
     }
   } else {
-    const _key = code === 'KeyQ' ? 'q' : code;
+    const _key = key || code.toLowerCase().replace(/^key/, '');
     const _type = type === 'keyDown' ? 'keydown' : 'keyup';
     gameWindow.webContents.executeJavaScript(`(function(){var e=new KeyboardEvent('${_type}',{key:'${_key}',code:'${code}',keyCode:${keyCode},which:${keyCode},bubbles:true,cancelable:true});document.dispatchEvent(e);})()`);
   }
@@ -193,6 +201,7 @@ const createWindow = () => {
     ipcMain.removeAllListeners("get-settings");
     ipcMain.removeAllListeners("update-setting");
     ipcMain.removeAllListeners("dawn-bhop-key");
+    ipcMain.removeAllListeners("save-recording");
     gameWindow = null;
   });
 };

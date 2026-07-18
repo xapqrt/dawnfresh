@@ -36,7 +36,12 @@ function applySwitches() {
   // the GPU process (surface-creation failures -> GPU crash) on Electron 12 / Apple Silicon.
   const rasterThreads = Math.min(os.cpus().length, 4);
   app.commandLine.appendSwitch("num-raster-threads", String(rasterThreads));
-  app.commandLine.appendSwitch("enable-features", "VaapiIgnoreDriverChecks");
+  if (process.platform === "darwin") {
+    app.commandLine.appendSwitch("enable-features", "VaapiIgnoreDriverChecks,ScreenCaptureKit");
+    app.commandLine.appendSwitch("enable-gpu-memory-buffer-video-frames");
+  } else {
+    app.commandLine.appendSwitch("enable-features", "VaapiIgnoreDriverChecks");
+  }
   app.commandLine.appendSwitch("force-color-profile", "srgb");
   app.commandLine.appendSwitch("canvas-msaa-sample-count", "0");
 
