@@ -6,6 +6,7 @@ const os = require("os");
 function applySwitches() {
   let in_process_gpu = false;
   let use_angle_opengl = false;
+  let use_angle_metal = false;
   try {
     const configPath = path.join(app.getPath("userData"), "config.json");
     if (fs.existsSync(configPath)) {
@@ -13,15 +14,16 @@ function applySwitches() {
       if (stored && stored.settings) {
         in_process_gpu = !!stored.settings.in_process_gpu;
         use_angle_opengl = !!stored.settings.use_angle_opengl;
+        use_angle_metal = !!stored.settings.use_angle_metal;
       }
     }
   } catch (e) {}
 
-  // NOTE: intentionally do NOT force use-gl=angle / use-angle=metal. Forcing the
-  // ANGLE-Metal backend on Electron 12 / Apple Silicon causes
+  // NOTE: ANGLE-Metal is gated behind stored.settings.use_angle_metal (default false).
+  // On Electron 12 / Apple Silicon it can cause
   // 'glBindTexture: target was GL_TEXTURE_RECTANGLE_ARB' + 'failed to create surface'
-  // GL errors -> splash stuck on blue screen. Let Chromium pick its default macOS
-  // Metal backend (the known-working upstream behavior).
+  // GL errors -> splash stuck on blue screen. Enable only by setting
+  // "use_angle_metal":true in config.json (no rebuild needed).
 
   app.commandLine.appendSwitch("high-dpi-support", "1");
   app.commandLine.appendSwitch("ignore-gpu-blocklist");
@@ -37,7 +39,7 @@ function applySwitches() {
   const rasterThreads = Math.min(os.cpus().length, 4);
   app.commandLine.appendSwitch("num-raster-threads", String(rasterThreads));
   if (process.platform === "darwin") {
-    app.commandLine.appendSwitch("enable-features", "VaapiIgnoreDriverChecks,ScreenCaptureKit");
+    app.commandLine.appendSwitch("enable-features", "VaapiIgnoreDriverChecks,ScreenCaptureKit,AsyncWheelEvents");
     app.commandLine.appendSwitch("enable-gpu-memory-buffer-video-frames");
   } else {
     app.commandLine.appendSwitch("enable-features", "VaapiIgnoreDriverChecks");
@@ -48,14 +50,19 @@ function applySwitches() {
   if (in_process_gpu) {
     app.commandLine.appendSwitch("in-process-gpu");
   }
+  if (use_angle_metal) {
+    app.commandLine.appendSwitch("use-gl", "angle");
+    app.commandLine.appendSwitch("use-angle", "metal");
+  }
 
   app.commandLine.appendSwitch("disable-background-timer-throttling");
   app.commandLine.appendSwitch("disable-renderer-backgrounding");
   app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
   app.commandLine.appendSwitch("enable-coalesced-mouse");
+  app.commandLine.appendSwitch("touch-events", "disabled");
   app.commandLine.appendSwitch("disable-features",
     "CalculateNativeWinOcclusion,PaintHolding,IntensiveWakeUpThrottling,Translate,OptimizationHints,MediaRouter,BackForwardCache");
-  app.commandLine.appendSwitch("js-flags", "--max-old-space-size=512 --expose-gc");
+  app.commandLine.appendSwitch("js-flags", "--max-old-space-size=2048 --expose-gc");
   app.commandLine.appendSwitch("audio-output-sample-rate", "48000");
   app.commandLine.appendSwitch("audio-buffer-size", "512");
 
