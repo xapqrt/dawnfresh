@@ -50,7 +50,7 @@ function applySwitches() {
   app.commandLine.appendSwitch("enable-coalesced-mouse");
   app.commandLine.appendSwitch("disable-features",
     "CalculateNativeWinOcclusion,PaintHolding,IntensiveWakeUpThrottling,Translate,OptimizationHints,MediaRouter,BackForwardCache");
-  app.commandLine.appendSwitch("js-flags", "--max-old-space-size=512");
+  app.commandLine.appendSwitch("js-flags", "--max-old-space-size=512 --expose-gc");
   app.commandLine.appendSwitch("audio-output-sample-rate", "48000");
   app.commandLine.appendSwitch("audio-buffer-size", "512");
 

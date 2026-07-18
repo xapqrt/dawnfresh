@@ -114,8 +114,11 @@ let _previousUrl;
 
 const _isMatch = (url) => {
   try { const p = new URL(url).pathname; return p.startsWith('/games') || p.startsWith('/hub/ranked'); }
-  catch (e) { return false; }
+  catch (e) { return false; };
 };
+
+window.__inMatch = _isMatch(window.location.href);
+setInterval(() => { if (window.__inMatch === false && typeof global.gc === 'function') global.gc(true); }, 30000);
 
 window.addEventListener("DOMContentLoaded", () => {
   const s1 = document.createElement("style"); s1.id = "juice-styles-theme"; document.head.appendChild(s1);
@@ -238,8 +241,9 @@ window.addEventListener("DOMContentLoaded", () => {
 
   ipcRenderer.on("url-change", (_, url) => {
     window._currentUrl = url;
+    window.__inMatch = _isMatch(url);
 
-    if (_isMatch(url)) {
+    if (window.__inMatch) {
       setAdsPower(settings.ads_power);
     }
 
@@ -248,7 +252,8 @@ window.addEventListener("DOMContentLoaded", () => {
 
   const handleInitialLoad = () => {
     const url = window.location.href;
-    if (_isMatch(url)) {
+    window.__inMatch = _isMatch(url);
+    if (window.__inMatch) {
       setAdsPower(settings.ads_power);
     } else {
       schedulePrewarmHotPaths();

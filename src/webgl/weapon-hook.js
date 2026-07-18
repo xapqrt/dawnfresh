@@ -131,7 +131,8 @@ const _installWrappers = (gl) => {
   const origUniform4 = gl.uniformMatrix4fv.bind(gl);
 
   gl.uniformMatrix4fv = (location, transpose, data, srcOffset, srcLength) => {
-    if (!_enableMods || window.__weaponModsActive === false || !data || data.length < 16) {
+    if (window.__weaponModsActive === false) return origUniform4(location, transpose, data, srcOffset, srcLength);
+    if (!_enableMods || !data || data.length < 16) {
       return origUniform4(location, transpose, data, srcOffset, srcLength);
     }
 
