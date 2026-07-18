@@ -174,6 +174,16 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             return
         }
 
+        // CRITICAL: AVAssetWriter aborts the whole process (uncatchable Obj-C
+        // exception) if finishWriting is called when status != .writing. If the
+        // session never started (no frames written -> status .unknown) we must
+        // NOT call finishWriting; just discard the empty file instead.
+        guard writer.status == .writing else {
+            print("[DawnRecorder] Writer status \(writer.status.rawValue) (not .writing) — discarding empty file")
+            try? FileManager.default.removeItem(at: writer.outputURL)
+            return
+        }
+
         videoInput.markAsFinished()
 
         writer.finishWriting {
@@ -350,18 +360,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue(label: "com.dawn.recorder.fifo", qos: .background).async { [weak self] in
             guard let self = self else { return }
 
+            // Persistent BLOCKING reader. The client opens O_WRONLY (blocking),
+            // so it waits for this reader to be connected. We keep one fd open
+            // and read in a loop; reopen only after the writer closes (EOF).
             while true {
                 let fd = open(Config.fifoPath, O_RDONLY)
                 if fd < 0 {
-                    print("[DawnRecorder] FIFO open failed: \(String(cString: strerror(errno)))")
-                    Thread.sleep(forTimeInterval: 1)
+                    Thread.sleep(forTimeInterval: 0.5)
                     continue
                 }
-
                 var byte: UInt8 = 0
                 while read(fd, &byte, 1) == 1 {
+                    print("[DawnRecorder] FIFO cmd: \(Character(UnicodeScalar(byte)))")
+                    let b = byte
                     DispatchQueue.main.async {
-                        switch byte {
+                        switch b {
                         case UInt8(ascii: "t"): self.recorder.toggle()
                         case UInt8(ascii: "s"): self.recorder.start()
                         case UInt8(ascii: "S"): self.recorder.stop()
@@ -369,7 +382,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         }
                     }
                 }
-                close(fd)
+                close(fd) // writer closed; loop to reopen
             }
         }
     }
