@@ -37,7 +37,9 @@ function installRecorder() {
       fps: parseInt(s.rec_fps) || 60,
       scale: parseFloat(s.rec_scale) || 1,
       codec: s.rec_codec || 'vp9',
-      indicator: s.rec_indicator !== undefined ? !!s.rec_indicator : true
+      indicator: s.rec_indicator !== undefined ? !!s.rec_indicator : true,
+      keybind: s.rec_keybind || 'F9',
+      keybind2: s.rec_keybind2 || null
     };
   }
 
@@ -57,17 +59,27 @@ function installRecorder() {
       if (w % 2) w++; if (h % 2) h++;
 
       _desktopCapturer.getSources({
-        types: ['window'],
+        types: ['screen', 'window'],
         thumbnailSize: { width: 0, height: 0 },
         fetchWindowIcons: false,
       }).then(function(sources) {
         var src = sources.find(function(s) {
-          return s.name.indexOf('Dawn Client') !== -1 || s.name.indexOf('kirka') !== -1;
+          return s.name.indexOf('Dawn Client') !== -1 || s.name.indexOf('kirka') !== -1 || s.name.indexOf('240Hz') !== -1;
         });
+        if (!src) { src = sources.find(function(s) { return s.id; }); }
         if (!src) { src = sources[0]; }
         if (!src) return;
 
-        navigator.mediaDevices.getUserMedia({
+        var mediaFn = typeof navigator.mediaDevices.getDisplayMedia === 'function'
+          ? navigator.mediaDevices.getDisplayMedia
+          : null;
+        if (mediaFn) {
+          console.log('[Recorder] using getDisplayMedia path');
+        } else {
+          mediaFn = function(c) { return navigator.mediaDevices.getUserMedia(c); };
+          console.log('[Recorder] getDisplayMedia unavailable, falling back to getUserMedia');
+        }
+        mediaFn({
           audio: false,
           video: {
             mandatory: {
@@ -101,6 +113,7 @@ function installRecorder() {
             var reader = new FileReader();
             reader.onload = function() {
               _ipc.send('save-recording', reader.result);
+              try { require('fs').appendFileSync(require('path').join(require('os').homedir(), 'rec-debug.log'), 'REC STOP saved\n'); } catch(e) {}
             };
             reader.readAsArrayBuffer(blob);
             if (_stream) { _stream.getTracks().forEach(function(t) { t.stop(); }); _stream = null; }
@@ -108,6 +121,7 @@ function installRecorder() {
           };
           _mediaRecorder.start(1000);
           _recording = true;
+          try { require('fs').appendFileSync(require('path').join(require('os').homedir(), 'rec-debug.log'), 'REC START w='+w+' h='+h+' mime='+mime+'\n'); } catch(e) {}
           _createIndicator();
           _indicator.style.display = cfg.indicator ? '' : 'none';
           _updateUI(true);
@@ -129,13 +143,20 @@ function installRecorder() {
     _updateUI(false);
   }
 
-  document.addEventListener('keydown', function(e) {
-    if (e.key === 'F9') {
-      e.preventDefault();
-      e.stopPropagation();
-      _toggle();
-    }
-  }, true);
+  (function() {
+    var cfg = _readConfig();
+    var kb = String(cfg.keybind || 'F9').toUpperCase();
+    var kb2 = cfg.keybind2 ? String(cfg.keybind2).toUpperCase() : null;
+    console.log('[Recorder] keybind set to', kb + (kb2 ? ', ' + kb2 : ''));
+    document.addEventListener('keydown', function(e) {
+      var key = e.key ? e.key.toUpperCase() : '';
+      if (key === 'F9' || key === kb || (kb2 && key === kb2)) {
+        e.preventDefault();
+        e.stopPropagation();
+        _toggle();
+      }
+    }, true);
+  })();
 
   window.addEventListener('beforeunload', function() {
     if (_recording) _stop();

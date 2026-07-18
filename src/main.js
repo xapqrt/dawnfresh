@@ -20,6 +20,16 @@ app.on("ready", async () => {
     const gw = getGameWindow();
     if (gw && !gw.isDestroyed()) gw.webContents.send("toggle-menu");
   });
+
+  // TEMP proof harness: auto-start recorder after 4s if --test-record passed
+  if (process.argv.includes("--test-record")) {
+    setTimeout(() => {
+      const gw = getGameWindow();
+      if (gw && !gw.isDestroyed() && gw.webContents.executeJavaScript) {
+        gw.webContents.executeJavaScript("if (window.__dawnRecorder) window.__dawnRecorder.start();");
+      }
+    }, 4000);
+  }
 });
 
 app.on("before-quit", () => {
