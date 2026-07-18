@@ -1,346 +1,447 @@
-// Dawn Recorder — zero-overhead screen recorder for the Dawn Client.
-//
-// Architecture:
-//   This is a STANDALONE process. It uses ScreenCaptureKit (the same capture
-//   pipeline QuickTime uses) to sample the COMPOSITED output of the Dawn window
-//   (or the chosen display). It does NOT live inside the Electron renderer/GPU
-//   process, so it cannot compete with the game's WebGL for GPU time. Encoding
-//   is done by VideoToolbox (hardware H.264) on the dedicated video-encode
-//   engine, separate from the GPU rendering the game. Net effect on the game:
-//   ~zero.
-//
-// Usage:
-//   dawn-recorder                 -> run as a background daemon (global hotkey F9
-//                                    toggles recording; menu bar shows state)
-//   dawn-recorder --toggle        -> send SIGUSR1 to the running daemon (toggle)
-//   dawn-recorder --start         -> send SIGUSR2 to force-start
-//   dawn-recorder --stop          -> send SIGTERM to force-stop (keeps running)
-//
-// Env:
-//   DAWN_REC_KEY   keycode for the global hotkey (default 101 = F9)
-//   DAWN_REC_FPS   capture fps (default 60; lower = less overhead)
-//   DAWN_REC_TARGET "window" (default, captures the Dawn Client window) or
-//                   "display" (captures the main display)
-
-import Foundation
+import AppKit
 import ScreenCaptureKit
 import AVFoundation
 import CoreGraphics
 import CoreMedia
-import AppKit
+import CoreVideo
 import Darwin
 
-// ----------------------------------------------------------------------------
-// Config
-// ----------------------------------------------------------------------------
-let recKeyCode: Int64 = { if let s = ProcessInfo.processInfo.environment["DAWN_REC_KEY"], let i = Int64(s) { return i }; return 101 }() // F9
-let recFps: Int = { if let s = ProcessInfo.processInfo.environment["DAWN_REC_FPS"], let i = Int(s) { return i }; return 60 }()
-let recTarget: String = ProcessInfo.processInfo.environment["DAWN_REC_TARGET"] ?? "window"
-let outputDir = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Movies/clips")
-let pidFile = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".dawn-recorder.pid")
-
-// ----------------------------------------------------------------------------
-// State
-// ----------------------------------------------------------------------------
-var stream: SCStream?
-var assetWriter: AVAssetWriter?
-var videoInput: AVAssetWriterInput?
-var isRecording = false
-var didAddInput = false
-var startCompletion: (() -> Void)?
-var stopCompletion: (() -> Void)?
-let streamQueue = DispatchQueue(label: "dawn.recorder.stream")
-
-// ----------------------------------------------------------------------------
-// Helpers
-// ----------------------------------------------------------------------------
-func log(_ msg: String) {
-    let ts = ISO8601DateFormatter().string(from: Date())
-    FileHandle.standardError.write("\(ts) [dawn-recorder] \(msg)\n".data(using: .utf8)!)
+// MARK: - Configuration
+enum Config {
+    static let outputDir = (NSString(string: "~/Movies/clips") as String)
+    static let fifoPath = "/tmp/dawn-recorder-\(getuid()).fifo"
+    static let fps = max(1, min(240, Int(ProcessInfo.processInfo.environment["DAWN_REC_FPS"] ?? "") ?? 60))
+    static let targetMode = ProcessInfo.processInfo.environment["DAWN_REC_TARGET"] ?? "window"
+    static let hotkeyCode = Int(ProcessInfo.processInfo.environment["DAWN_REC_KEY"] ?? "") ?? 101
+    static let windowName = "Dawn Client"
 }
 
-func ensureOutputDir() {
-    try? FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
-}
+// MARK: - Screen Recorder
+final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
+    private let captureQueue = DispatchQueue(label: "com.dawn.recorder.capture", qos: .userInitiated)
+    private let writerQueue = DispatchQueue(label: "com.dawn.recorder.writer", qos: .utility)
+    private let lock = NSLock()
 
-func writePid() {
-    try? "\(ProcessInfo.processInfo.processIdentifier)".write(to: pidFile, atomically: true, encoding: .utf8)
-}
+    private var _isRecording = false
+    private var stream: SCStream?
+    private var writer: AVAssetWriter?
+    private var videoInput: AVAssetWriterInput?
+    private var firstBuffer = true
+    private var frameCount = 0
 
-func readPid() -> pid_t? {
-    guard let s = try? String(contentsOf: pidFile, encoding: .utf8),
-          let pid = pid_t(s.trimmingCharacters(in: .whitespacesAndNewlines)) else { return nil }
-    // verify it's alive
-    if kill(pid, 0) == 0 { return pid }
-    return nil
-}
+    var isRecording: Bool { lock.withLock { _isRecording } }
 
-func newOutputURL() -> URL {
-    let df = DateFormatter()
-    df.dateFormat = "yyyyMMdd-HHmmss"
-    return outputDir.appendingPathComponent("dawn-\(df.string(from: Date())).mp4")
-}
+    var onStatusChange: ((Bool) -> Void)?
 
-// ----------------------------------------------------------------------------
-// Capture target selection
-// ----------------------------------------------------------------------------
-func pickContent() async throws -> (SCContentFilter, CGSize) {
-    let available = try await SCShareableContent.current
-    // 1) try to find the Dawn Client window
-    if recTarget == "window",
-       let dawnApp = available.applications.first(where: { $0.applicationName == "Dawn Client" }) {
-        let filter = SCContentFilter(display: available.displays.first!,
-                                     including: [dawnApp],
-                                     exceptingWindows: [])
-        let b = dawnApp.applicationName
-        _ = b
-        // use the first Dawn window's frame for sizing
-        if let win = available.windows.first(where: { $0.owningApplication?.applicationName == "Dawn Client" }) {
-            let f = win.frame
-            return (filter, CGSize(width: f.width, height: f.height))
+    func start() {
+        lock.withLock {
+            guard !_isRecording else { return }
+            _isRecording = true
         }
-        return (filter, CGSize(width: 1920, height: 1080))
-    }
-    // 2) fallback: main display (capture everything except nothing)
-    guard let display = available.displays.first else { throw NSError(domain: "dawn", code: 1, userInfo: [NSLocalizedDescriptionKey: "no display"]) }
-    let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
-    let scale = NSScreen.main?.backingScaleFactor ?? 1.0
-    return (filter, CGSize(width: CGFloat(display.width) * scale, height: CGFloat(display.height) * scale))
-}
 
-// ----------------------------------------------------------------------------
-// Recording control
-// ----------------------------------------------------------------------------
-func startRecording() async {
-    guard !isRecording else { log("already recording"); return }
-    ensureOutputDir()
-    let url = newOutputURL()
-    // fetch capture target + dimensions first so the writer knows the frame size
-    let content: (SCContentFilter, CGSize)
-    do { content = try await pickContent() } catch { log("pickContent failed: \(error)"); return }
-    let (filter, size) = content
-    let w = max(2, Int(size.width))
-    let h = max(2, Int(size.height))
-    do {
-        let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
-        let settings: [String: Any] = [
-            AVVideoCodecKey: AVVideoCodecType.h264,
-            AVVideoWidthKey: w,
-            AVVideoHeightKey: h,
-            // hardware encode is the default on macOS for h264 via VideoToolbox
-        ]
-        let input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
-        input.expectsMediaDataInRealTime = true
-        assetWriter = writer
-        videoInput = input
-        didAddInput = false
-
-        streamQueue.async {
-            Task {
-                do {
-                    let cfg = SCStreamConfiguration()
-                    cfg.width = w
-                    cfg.height = h
-                    cfg.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(recFps))
-                    cfg.pixelFormat = kCVPixelFormatType_32BGRA
-                    cfg.capturesAudio = false
-                    cfg.showsCursor = true
-
-                    let s = SCStream(filter: filter, configuration: cfg, delegate: nil)
-                    let out = RecorderOutput()
-                    try s.addStreamOutput(out, type: .screen, sampleHandlerQueue: streamQueue)
-                    try await s.startCapture()
-                    stream = s
-                    isRecording = true
-                    DispatchQueue.main.async { updateMenuBar() }
-                    log("recording started -> \(url.path)")
-                    startCompletion?(); startCompletion = nil
-                } catch {
-                    log("start failed: \(error)")
-                    writer.cancelWriting()
-                    assetWriter = nil; videoInput = nil
-                    startCompletion?(); startCompletion = nil
-                }
-            }
+        captureQueue.async { [weak self] in
+            self?._setupCapture()
         }
-    } catch {
-        log("AVAssetWriter init failed: \(error)")
     }
-}
 
-func stopRecording() {
-    guard isRecording else { log("not recording"); return }
-    isRecording = false
-    DispatchQueue.main.async { updateMenuBar() }
-    let writer = assetWriter
-    let s = stream
-    let outURL: URL? = writer?.outputURL
-    streamQueue.async {
-        Task {
-            do { try await s?.stopCapture() } catch { log("stopCapture err: \(error)") }
-            stream = nil
-            // give the writer a moment to flush the last buffers
-            try? await Task.sleep(nanoseconds: 400_000_000)
-            writer?.finishWriting {
-                if let u = outURL, let w = writer {
-                    let ok = w.status == .completed
-                    let sz = (try? FileManager.default.attributesOfItem(atPath: u.path)[.size] as? Int) ?? 0
-                    log("recording stopped. completed=\(ok) bytes=\(sz) -> \(u.path)")
+    func stop() {
+        let shouldStop = lock.withLock {
+            guard _isRecording else { return false }
+            _isRecording = false
+            return true
+        }
+        guard shouldStop else { return }
+
+        DispatchQueue.main.async { [weak self] in
+            self?.onStatusChange?(false)
+        }
+
+        writerQueue.async { [weak self] in
+            guard let self = self else { return }
+            let s = self.stream
+            self.stream = nil
+
+            s?.stopCapture { [weak self] error in
+                if let error = error {
+                    print("[DawnRecorder] stopCapture error: \(error.localizedDescription)")
                 }
-                assetWriter = nil; videoInput = nil; didAddInput = false
-                stopCompletion?(); stopCompletion = nil
+                self?._finalizeRecording()
             }
         }
     }
-}
 
-func toggleRecording() {
-    if isRecording { stopRecording() }
-    else { Task { await startRecording() } }
-}
+    func toggle() {
+        if isRecording { stop() } else { start() }
+    }
 
-// ----------------------------------------------------------------------------
-// Stream output
-// ----------------------------------------------------------------------------
-class RecorderOutput: NSObject, SCStreamOutput {
-    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .screen else { return }
-        guard let writer = assetWriter, let input = videoInput else { return }
-        if sampleBuffer.numSamples == 0 { return }
-        if writer.status == .unknown {
-            // need to start a session with the first buffer's timing
-            if !writer.startWriting() { return }
+    private func _setupCapture() {
+        SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: false) { [weak self] content, error in
+            guard let self = self else { return }
+
+            if let error = error {
+                print("[DawnRecorder] getShareableContent error: \(error.localizedDescription)")
+                print("[DawnRecorder] Screen Recording permission may not be granted.")
+                self._abortRecording()
+                return
+            }
+
+            guard let content = content else {
+                print("[DawnRecorder] No shareable content")
+                self._abortRecording()
+                return
+            }
+
+            var filter: SCContentFilter?
+
+            if Config.targetMode == "window" {
+                if let win = content.windows.first(where: { $0.title == Config.windowName }) {
+                    print("[DawnRecorder] Targeting window: \"\(win.title ?? "unknown")\"")
+                    filter = SCContentFilter(desktopIndependentWindow: win)
+                } else {
+                    print("[DawnRecorder] Window \"\(Config.windowName)\" not found, using display")
+                }
+            }
+
+            if filter == nil, let display = content.displays.first {
+                filter = SCContentFilter(display: display, excludingWindows: [])
+                print("[DawnRecorder] Targeting display \(display.displayID)")
+            }
+
+            guard let filter = filter else {
+                print("[DawnRecorder] No capture target")
+                self._abortRecording()
+                return
+            }
+
+            let config = SCStreamConfiguration()
+            config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(Config.fps))
+            config.showsCursor = false
+            config.queueDepth = 3
+
+            let s = SCStream(filter: filter, configuration: config, delegate: self)
+            self.stream = s
+            self.firstBuffer = true
+            self.frameCount = 0
+            self.writer = nil
+            self.videoInput = nil
+
+            do {
+                try s.addStreamOutput(self, type: .screen, sampleHandlerQueue: self.captureQueue)
+            } catch {
+                print("[DawnRecorder] addStreamOutput failed: \(error.localizedDescription)")
+                self._abortRecording()
+                return
+            }
+
+            self.captureQueue.async {
+                s.startCapture { [weak self] error in
+                    if let error = error {
+                        print("[DawnRecorder] startCapture error: \(error.localizedDescription)")
+                        self?._abortRecording()
+                    } else {
+                        print("[DawnRecorder] Capture started")
+                        DispatchQueue.main.async {
+                            self?.onStatusChange?(true)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func _abortRecording() {
+        lock.withLock { _isRecording = false }
+        stream = nil
+        writer = nil
+        videoInput = nil
+        firstBuffer = true
+        DispatchQueue.main.async { [weak self] in
+            self?.onStatusChange?(false)
+        }
+    }
+
+    private func _finalizeRecording() {
+        defer {
+            self.stream = nil
+            self.writer = nil
+            self.videoInput = nil
+            self.firstBuffer = true
+            self.frameCount = 0
+        }
+
+        guard let videoInput = videoInput, let writer = writer else {
+            print("[DawnRecorder] No recording to finalize")
+            return
+        }
+
+        videoInput.markAsFinished()
+
+        writer.finishWriting {
+            if writer.status == .completed {
+                let size = (try? FileManager.default.attributesOfItem(atPath: writer.outputURL.path))?[.size] as? UInt64 ?? 0
+                print("[DawnRecorder] Saved: \(writer.outputURL.lastPathComponent) (\(size) bytes)")
+                if size == 0 {
+                    print("[DawnRecorder] WARNING: output file is 0 bytes!")
+                    try? FileManager.default.removeItem(at: writer.outputURL)
+                }
+            } else {
+                print("[DawnRecorder] finishWriting failed: \(writer.error?.localizedDescription ?? "unknown")")
+                try? FileManager.default.removeItem(at: writer.outputURL)
+            }
+        }
+    }
+
+    // MARK: - SCStreamOutput
+    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {
+        guard outputType == .screen, CMSampleBufferDataIsReady(sampleBuffer) else { return }
+
+        guard lock.withLock({ _isRecording }) else { return }
+
+        if firstBuffer {
+            firstBuffer = false
+
+            guard let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer) else { return }
+
+            let dims = CMVideoFormatDescriptionGetDimensions(formatDesc)
+            let w = max(2, (Int(dims.width) + 1) & ~1)
+            let h = max(2, (Int(dims.height) + 1) & ~1)
+
+            var colorProps: [String: String] = [:]
+            if let ext = CMFormatDescriptionGetExtensions(formatDesc) as NSDictionary? {
+                if let v = ext[kCMFormatDescriptionExtension_YCbCrMatrix] as? String {
+                    colorProps[AVVideoYCbCrMatrixKey] = v
+                }
+                if let v = ext[kCMFormatDescriptionExtension_TransferFunction] as? String {
+                    colorProps[AVVideoTransferFunctionKey] = v
+                }
+                if let v = ext[kCMFormatDescriptionExtension_ColorPrimaries] as? String {
+                    colorProps[AVVideoColorPrimariesKey] = v
+                }
+            }
+
+            var videoSettings: [String: Any] = [
+                AVVideoCodecKey: AVVideoCodecType.h264,
+                AVVideoWidthKey: w,
+                AVVideoHeightKey: h,
+            ]
+            if !colorProps.isEmpty {
+                videoSettings[AVVideoColorPropertiesKey] = colorProps
+            }
+
+            let df = DateFormatter()
+            df.dateFormat = "yyyyMMdd-HHmmss"
+            let fileName = "dawn-\(df.string(from: Date())).mp4"
+
+            do {
+                try FileManager.default.createDirectory(atPath: Config.outputDir, withIntermediateDirectories: true)
+            } catch {
+                print("[DawnRecorder] Failed to create output dir: \(error.localizedDescription)")
+            }
+
+            let fileURL = URL(fileURLWithPath: "\(Config.outputDir)/\(fileName)")
+
+            guard let writer = try? AVAssetWriter(url: fileURL, fileType: .mp4) else {
+                print("[DawnRecorder] Failed to create AVAssetWriter")
+                return
+            }
+
+            let input = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
+            input.expectsMediaDataInRealTime = true
+
+            guard writer.canAdd(input) else {
+                print("[DawnRecorder] AVAssetWriter cannot add input")
+                return
+            }
+            writer.add(input)
+
+            guard writer.startWriting() else {
+                print("[DawnRecorder] AVAssetWriter.startWriting failed: \(writer.error?.localizedDescription ?? "unknown")")
+                return
+            }
+
             let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
             writer.startSession(atSourceTime: pts)
+
+            self.writer = writer
+            self.videoInput = input
+
+            print("[DawnRecorder] Recording \(w)x\(h) H.264 to \(fileName)")
         }
-        if !didAddInput {
-            if writer.canAdd(input) { writer.add(input); didAddInput = true }
-            else { log("cannot add input"); return }
+
+        guard let input = videoInput, let writer = writer,
+              writer.status == .writing, input.isReadyForMoreMediaData else { return }
+
+        if input.append(sampleBuffer) {
+            frameCount += 1
+            if frameCount % 60 == 0 {
+                print("[DawnRecorder] Frames: \(frameCount)")
+            }
+        } else {
+            print("[DawnRecorder] append failed: \(writer.error?.localizedDescription ?? "unknown")")
         }
-        if input.isReadyForMoreMediaData {
-            input.append(sampleBuffer)
+    }
+
+    // MARK: - SCStreamDelegate
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        print("[DawnRecorder] Stream stopped: \(error.localizedDescription)")
+        if isRecording {
+            stop()
         }
     }
 }
 
-// ----------------------------------------------------------------------------
-// Menu bar (lightweight status indicator)
-// ----------------------------------------------------------------------------
-class MenuTarget: NSObject {
-    @objc func toggle() { toggleRecording() }
-    @objc func quit() { stopRecording(); NSApplication.shared.terminate(nil) }
-}
-let menuTarget = MenuTarget()
+// MARK: - App Delegate
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var statusItem: NSStatusItem!
+    private let recorder = Recorder()
+    private var eventTap: CFMachPort?
 
-var statusItem: NSStatusItem?
-func setupMenuBar() {
-    let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-    statusItem = item
-    updateMenuBar()
-    let menu = NSMenu()
-    let toggle = NSMenuItem(title: "Toggle Recording (F9)", action: #selector(MenuTarget.toggle), keyEquivalent: "")
-    toggle.target = menuTarget
-    let quit = NSMenuItem(title: "Quit", action: #selector(MenuTarget.quit), keyEquivalent: "q")
-    quit.target = menuTarget
-    menu.addItem(toggle); menu.addItem(quit)
-    item.menu = menu
-}
-func updateMenuBar() {
-    if let b = statusItem?.button {
-        b.title = isRecording ? "● REC" : "○"
-        b.toolTip = isRecording ? "Dawn Recorder: recording — press F9 to stop" : "Dawn Recorder: idle — press F9 to record"
-    }
-}
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        buildMenu()
+        setupFIFOReader()
+        setupHotkey()
 
-// ----------------------------------------------------------------------------
-// Global hotkey (CGEvent tap)
-// ----------------------------------------------------------------------------
-func setupHotkey() {
-    let mask = (1 << CGEventType.keyDown.rawValue)
-    guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap,
-                                      place: .headInsertEventTap,
-                                      options: .defaultTap,
-                                      eventsOfInterest: CGEventMask(mask),
-                                      callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
-        if type == .keyDown {
-            let kc = event.getIntegerValueField(.keyboardEventKeycode)
-            let wanted = Int64(UserDefaults.standard.integer(forKey: "recKeyCode"))
-            if kc == wanted { toggleRecording() }
+        recorder.onStatusChange = { [weak self] recording in
+            self?.updateStatusBar(recording)
         }
-        return Unmanaged.passRetained(event)
-    }, userInfo: nil) else {
-        log("failed to create hotkey tap (need Accessibility permission)")
-        return
     }
-    UserDefaults.standard.set(recKeyCode, forKey: "recKeyCode")
-    let src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-    CFRunLoopAddSource(CFRunLoopGetCurrent(), src, .commonModes)
-    CGEvent.tapEnable(tap: tap, enable: true)
-    log("hotkey tap active (keycode \(recKeyCode))")
-}
 
-// ----------------------------------------------------------------------------
-// IPC: named pipe (FIFO) — robust control from `dawn-recorder --toggle` etc.
-//      (BSD signals are unreliable inside a Cocoa run loop, so we use a FIFO)
-// ----------------------------------------------------------------------------
-let fifoPath = NSTemporaryDirectory() + "dawn-rec-control"
+    func applicationWillTerminate(_ notification: Notification) {
+        if recorder.isRecording {
+            recorder.stop()
+        }
+        unlink(Config.fifoPath)
+    }
 
-func setupControlFIFO() {
-    unlink(fifoPath)
-    mkfifo(fifoPath, 0o600)
-    DispatchQueue.global(qos: .utility).async {
-        while true {
-            let fd = open(fifoPath, O_RDONLY)
-            guard fd >= 0 else { sleep(1); continue }
-            var buf = [CChar](repeating: 0, count: 1)
-            let n = read(fd, &buf, 1)
-            close(fd)
-            guard n == 1 else { continue }
-            switch buf[0] {
-            case 0x74: toggleRecording()                  // 't'
-            case 0x73: if !isRecording { Task { await startRecording() } }  // 's'
-            case 0x78: if isRecording { stopRecording() }  // 'x'
-            default: break
+    private func buildMenu() {
+        updateStatusBar(false)
+
+        let menu = NSMenu()
+        menu.addItem(NSMenuItem(title: "Start Recording", action: #selector(toggleRecording), keyEquivalent: ""))
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        statusItem.menu = menu
+    }
+
+    private func updateStatusBar(_ recording: Bool) {
+        guard let btn = statusItem.button else { return }
+
+        if recording {
+            btn.attributedTitle = NSAttributedString(string: "\u{25CF} Rec", attributes: [
+                .foregroundColor: NSColor.red,
+                .font: NSFont.menuBarFont(ofSize: 12)
+            ])
+        } else {
+            btn.title = "\u{25CB}"
+        }
+
+        statusItem.menu?.items[0].title = recording ? "Stop Recording" : "Start Recording"
+    }
+
+    @objc private func toggleRecording() {
+        recorder.toggle()
+    }
+
+    private func setupFIFOReader() {
+        unlink(Config.fifoPath)
+        mkfifo(Config.fifoPath, 0o644)
+
+        DispatchQueue(label: "com.dawn.recorder.fifo", qos: .background).async { [weak self] in
+            guard let self = self else { return }
+
+            while true {
+                let fd = open(Config.fifoPath, O_RDONLY)
+                if fd < 0 {
+                    print("[DawnRecorder] FIFO open failed: \(String(cString: strerror(errno)))")
+                    Thread.sleep(forTimeInterval: 1)
+                    continue
+                }
+
+                var byte: UInt8 = 0
+                while read(fd, &byte, 1) == 1 {
+                    DispatchQueue.main.async {
+                        switch byte {
+                        case UInt8(ascii: "t"): self.recorder.toggle()
+                        case UInt8(ascii: "s"): self.recorder.start()
+                        case UInt8(ascii: "S"): self.recorder.stop()
+                        default: break
+                        }
+                    }
+                }
+                close(fd)
             }
         }
     }
-    log("control FIFO ready at \(fifoPath)")
-}
 
-// ----------------------------------------------------------------------------
-// Remote control (for --toggle / --start / --stop)
-// ----------------------------------------------------------------------------
-func remoteControl(_ kind: String) {
-    guard readPid() != nil else {
-        log("no running daemon found"); exit(2)
+    private func setupHotkey() {
+        let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
+
+        let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: hotkeyCallback,
+            userInfo: Unmanaged.passUnretained(recorder).toOpaque()
+        )
+
+        if let tap = tap {
+            eventTap = tap
+            let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
+            print("[DawnRecorder] Hotkey F9 installed (keycode \(Config.hotkeyCode))")
+        } else {
+            print("[DawnRecorder] Hotkey tap not available (keyboard shortcut disabled)")
+        }
     }
-    // open for write (non-blocking so we don't hang if reader disappeared)
-    let fd = open(fifoPath, O_WRONLY | O_NONBLOCK)
-    guard fd >= 0 else { log("cannot open control FIFO (daemon not ready?)"); exit(3) }
-    let byte: CChar = (kind == "start") ? 0x73 : (kind == "stop" ? 0x78 : 0x74)
-    write(fd, [byte], 1)
-    close(fd)
-    log("sent \(kind) to daemon")
-    exit(0)
 }
 
-// ----------------------------------------------------------------------------
-// main
-// ----------------------------------------------------------------------------
-let args = CommandLine.arguments
-if args.contains("--toggle") { remoteControl("toggle") }
-else if args.contains("--start") { remoteControl("start") }
-else if args.contains("--stop") { remoteControl("stop") }
+// MARK: - Hotkey Callback
+private func hotkeyCallback(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent, refcon: UnsafeMutableRawPointer?) -> Unmanaged<CGEvent>? {
+    if type == .keyDown {
+        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+        if keyCode == Int64(Config.hotkeyCode), let refcon = refcon {
+            let recorder = Unmanaged<Recorder>.fromOpaque(refcon).takeUnretainedValue()
+            recorder.toggle()
+        }
+    }
+    return Unmanaged.passUnretained(event)
+}
 
-// Running as daemon
-writePid()
-setupControlFIFO()
-setupMenuBar()
-setupHotkey()
+// MARK: - Main
+private func main() {
+    let args = CommandLine.arguments
 
-// Accessibility prompt (one-time)
-let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-_ = AXIsProcessTrustedWithOptions(opts)
+    if args.contains("--toggle") || args.contains("-t") {
+        sendCommand("t")
+        return
+    }
+    if args.contains("--start") || args.contains("-s") {
+        sendCommand("s")
+        return
+    }
+    if args.contains("--stop") || args.contains("-S") {
+        sendCommand("S")
+        return
+    }
 
-log("dawn-recorder daemon started (pid \(ProcessInfo.processInfo.processIdentifier))")
-NSApplication.shared.run()
+    setbuf(__stdoutp, nil)
+    let app = NSApplication.shared
+    let delegate = AppDelegate()
+    app.delegate = delegate
+    app.run()
+}
+
+private func sendCommand(_ cmd: String) {
+    let fd = open(Config.fifoPath, O_WRONLY)
+    if fd < 0 {
+        print("Dawn Recorder is not running.")
+        return
+    }
+    var byte = cmd.utf8.first!
+    write(fd, &byte, 1)
+    close(fd)
+}
+
+main()
