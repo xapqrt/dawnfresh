@@ -142,6 +142,20 @@ function installRecorder() {
       _mediaRecorder = null;
     }
     _updateUI(false);
+    // Robustness: if onstop doesn't fire (some Electron builds), flush after 1.2s
+    setTimeout(function() {
+      if (_chunks.length === 0) return;
+      var blob = new Blob(_chunks, { type: 'video/webm' });
+      _chunks = [];
+      var reader = new FileReader();
+      reader.onload = function() {
+        _ipc.send('save-recording', reader.result);
+        try { require('fs').appendFileSync(require('os').homedir() + '/rec-debug.log', 'REC STOP saved (fallback)\n'); } catch (e) {}
+      };
+      reader.readAsArrayBuffer(blob);
+      if (_stream) { _stream.getTracks().forEach(function(t) { t.stop(); }); _stream = null; }
+      _mediaRecorder = null;
+    }, 1200);
   }
 
   (function() {
