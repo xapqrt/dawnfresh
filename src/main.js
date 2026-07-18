@@ -20,14 +20,6 @@ app.on("ready", async () => {
     const gw = getGameWindow();
     if (gw && !gw.isDestroyed()) gw.webContents.send("toggle-menu");
   });
-  if (process.argv.includes("--test-menu")) {
-    setTimeout(() => {
-      const gw = getGameWindow();
-      if (gw && !gw.isDestroyed()) {
-        gw.webContents.send("toggle-menu");
-      }
-    }, 4000);
-  }
 });
 
 app.on("before-quit", () => {

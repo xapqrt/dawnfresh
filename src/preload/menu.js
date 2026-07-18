@@ -1748,8 +1748,6 @@ class Menu {
   }
 
   _toggleMenu() {
-    const fs=require("fs"); const os=require("os");
-    try { fs.appendFileSync(os.homedir()+"/menu-debug.log", "TOGGLE t="+Date.now()+" before="+this.menuToggle.getAttribute("data-active")+"\n"); } catch(e){}
     const isActive = this.menuToggle.getAttribute("data-active") === "true";
     if (!isActive) {
       try { document.exitPointerLock(); } catch (e) {}
