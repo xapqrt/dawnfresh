@@ -112,20 +112,9 @@ const schedulePrewarmHotPaths = () => {
 
 let _previousUrl;
 
-// GC management — run full GC in lobby/menus to prevent mid-game pauses
-let _gcTimer = null;
-const _gc = typeof gc === 'function' ? () => { try { gc(true); } catch (e) {} } : () => {};
 const _isMatch = (url) => {
   try { const p = new URL(url).pathname; return p.startsWith('/games') || p.startsWith('/hub/ranked'); }
   catch (e) { return false; }
-};
-const _startGc = () => {
-  if (_gcTimer !== null) return;
-  _gc();
-  _gcTimer = setInterval(_gc, 60000);
-};
-const _stopGc = () => {
-  if (_gcTimer !== null) { clearInterval(_gcTimer); _gcTimer = null; }
 };
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -252,9 +241,6 @@ window.addEventListener("DOMContentLoaded", () => {
 
     if (_isMatch(url)) {
       setAdsPower(settings.ads_power);
-      _stopGc();
-    } else if (_previousUrl && _isMatch(_previousUrl)) {
-      _startGc();
     }
 
     _previousUrl = url;
@@ -265,7 +251,6 @@ window.addEventListener("DOMContentLoaded", () => {
     if (_isMatch(url)) {
       setAdsPower(settings.ads_power);
     } else {
-      _startGc();
       schedulePrewarmHotPaths();
     }
     _previousUrl = url;

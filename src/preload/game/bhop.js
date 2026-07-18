@@ -28,7 +28,7 @@ function installBhopHook(capCheck) {
   }
 
   var _lastToggle = 0;
-  var _holdMs = 40;
+  var _holdMs = 22;
   var _jitterMs = 6;
   var _jitterAccum = 0;
 
