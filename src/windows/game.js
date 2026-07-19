@@ -150,7 +150,7 @@ const createWindow = () => {
   });
 
   gameWindow.webContents.setUserAgent(
-    `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.7204.296 Safari/537.36 Electron/10.4.7 DawnClient/${app.getVersion()}`
+    `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.128 Safari/537.36 Electron/12.2.3 DawnClient/${app.getVersion()}`
   );
 
   // Google / OAuth popups (window.open) must open IN-APP as real child windows
@@ -159,32 +159,13 @@ const createWindow = () => {
   // (shell.openExternal) breaks OAuth because the redirect can't come back.
   // nativeWindowOpen:true makes Electron create native child popups when we
   // return action:'allow'.
-  gameWindow.webContents.setWindowOpenHandler(({ url, frameName, features }) => {
-    const u = String(url || "");
-    const isAuth = /(accounts\.google\.com|googleapis\.com|oauth|login|auth|signin|facebook|discord|appleid\.com)/i.test(u);
-    if (isAuth) {
-      // Open as an in-app child window so the OAuth flow completes and posts
-      // the result back to the parent game window.
-      return {
-        action: "allow",
-        overrideBrowserWindowOptions: {
-          titleBarStyle: "hidden",
-          fullscreenable: false,
-          width: 480,
-          height: 640,
-          backgroundColor: "#141414",
-          webPreferences: {
-            nodeIntegration: false,
-            contextIsolation: true,
-            sandbox: true,
-            webSecurity: true,
-          },
-        },
-      };
-    }
-    // Non-auth links: open in the default browser.
-    if (u && /^https?:\/\//.test(u)) require("electron").shell.openExternal(u);
-    return { action: "deny" };
+  gameWindow.webContents.on("new-window", (e, url) => {
+    // Match upstream (zVipexx/dawn-client): send auth/popup links to the
+    // system browser. kirka.io's OAuth is a redirect flow that completes there
+    // and the game window picks up the session on reload — this is the
+    // proven-working behavior.
+    e.preventDefault();
+    require("electron").shell.openExternal(url);
   });
 
   gameWindow.webContents.on("did-navigate-in-page", (e, url) => {
