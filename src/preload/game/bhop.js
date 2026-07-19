@@ -14,6 +14,11 @@ function installBhopHook(capCheck) {
   var _strafeKey = null;
   var _strafePhysDown = false;
 
+  // Decoupled strafe-switch timing (air-control). Independent from the jump
+  // pulse so the direction flip lands mid-air for max speed gain.
+  var _strafeSwitchMs = 130;
+  var _lastStrafeSwitch = 0;
+
   var _qDownEvt = new KeyboardEvent("keydown", {
     key: "q", code: "KeyQ", keyCode: 81, which: 81,
     bubbles: true, cancelable: true,
@@ -46,22 +51,24 @@ function installBhopHook(capCheck) {
   var _dD = { type: 'keyDown', keyCode: 68, code: 'KeyD', key: 'd' };
   var _dU = { type: 'keyUp', keyCode: 68, code: 'KeyD', key: 'd' };
 
-  function _send(payload, evtDown, evtUp, down) {
-    if (_ipc) {
-      _ipc.send('dawn-bhop-key', payload);
-    } else {
-      document.dispatchEvent(down ? evtDown : evtUp);
-    }
-  }
-
   function _postKey(key, down) {
-    if (key === 'q') {
-      _send(down ? _qD : _qU, _qDownEvt, _qUpEvt, down);
-    } else if (key === 'a') {
-      _send(down ? _aD : _aU, _aDownEvt, _aUpEvt, down);
-    } else if (key === 'd') {
-      _send(down ? _dD : _dU, _dDownEvt, _dUpEvt, down);
+    // Relay to the main process, which dispatches via the CDP debugger's
+    // Input.dispatchKeyEvent (lowest latency, bypasses the page event pipeline).
+    // Falls back to direct DOM dispatch if IPC is unavailable.
+    if (_ipc) {
+      var map = {
+        q: { keyCode: 81, code: 'KeyQ', key: 'q' },
+        a: { keyCode: 65, code: 'KeyA', key: 'a' },
+        d: { keyCode: 68, code: 'KeyD', key: 'd' },
+      };
+      var m = map[key];
+      if (m) {
+        try { _ipc.send('dawn-bhop-key', { type: down ? 'keyDown' : 'keyUp', keyCode: m.keyCode, code: m.code, key: m.key }); return; } catch (e) {}
+      }
     }
+    if (key === 'q') document.dispatchEvent(down ? _qDownEvt : _qUpEvt);
+    else if (key === 'a') document.dispatchEvent(down ? _aDownEvt : _aUpEvt);
+    else if (key === 'd') document.dispatchEvent(down ? _dDownEvt : _dUpEvt);
   }
 
   function _isInput(el) {
@@ -107,10 +114,28 @@ function installBhopHook(capCheck) {
     _strafePhysDown = true;
   }
 
+  // Decoupled strafe flip: toggles the strafe direction on its own timer
+  // (independent of the jump pulse) for optimal air-control / speed.
+  function _strafeSwitch() {
+    if (!_strafeKey) return;
+    var physicallyHeld = (_strafeKey === 'a' && _aDown) || (_strafeKey === 'd' && _dDown);
+    if (physicallyHeld) return; // user is steering manually; don't fight them
+    _postKey(_strafeKey, false);
+    _strafeKey = (_strafeKey === 'a') ? 'd' : 'a';
+    _postKey(_strafeKey, true);
+    _strafePhysDown = true;
+  }
+
   function _tick(now) {
     if (!_bhopOn) { _rAFId = null; return; }
 
     if (capCheck && !capCheck(now)) { _rAFId = requestAnimationFrame(_tick); return; }
+
+    // Decoupled strafe switching (air-control), runs on its own cadence.
+    if (_strafeKey && (now - _lastStrafeSwitch) >= _strafeSwitchMs) {
+      _lastStrafeSwitch = now;
+      _strafeSwitch();
+    }
 
     var grounded = _checkGrounded();
 
@@ -120,7 +145,6 @@ function installBhopHook(capCheck) {
         _qDownPhys = false; _postKey('q', false); _phase = 2;
       }
       _qDownPhys = true; _postKey('q', true);
-      _pulseStrafe();
       _phase = 1;
       _jitterAccum = Math.random() * _jitterMs;
       _rAFId = requestAnimationFrame(_tick);
@@ -161,6 +185,7 @@ function installBhopHook(capCheck) {
     _checkGrounded();
     _strafeKey = _aDown ? 'a' : (_dDown ? 'd' : null);
     _strafePhysDown = false;
+    _lastStrafeSwitch = performance.now();
     _phase = 1; _qDownPhys = true; _postKey('q', true);
     _lastToggle = performance.now();
     _rAFId = requestAnimationFrame(_tick);
@@ -190,8 +215,8 @@ function installBhopHook(capCheck) {
     if (_isInput(e.target)) return;
     if (k === "Shift") { _shiftDown = true; _start(); }
     else if (k === "q" || k === "Q") { _qDown = true; _start(); }
-    else if (k === "a" || k === "A") { _aDown = true; if (_bhopOn) _strafeKey = 'a'; }
-    else if (k === "d" || k === "D") { _dDown = true; if (_bhopOn) _strafeKey = 'd'; }
+    else if (k === "a" || k === "A") { _aDown = true; if (_bhopOn) { _strafeKey = 'a'; _lastStrafeSwitch = performance.now(); } }
+    else if (k === "d" || k === "D") { _dDown = true; if (_bhopOn) { _strafeKey = 'd'; _lastStrafeSwitch = performance.now(); } }
   }, true);
 
   window.addEventListener("keyup", function (e) {

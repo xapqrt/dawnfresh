@@ -53,6 +53,8 @@ function applySwitches() {
   if (process.platform === "darwin") {
     app.commandLine.appendSwitch("enable-features", "VaapiIgnoreDriverChecks,ScreenCaptureKit,AsyncWheelEvents,VizDisplayCompositor");
     app.commandLine.appendSwitch("enable-gpu-memory-buffer-video-frames");
+    // Disable touch/tablet input paths we never use — trims the event pipeline.
+    app.commandLine.appendSwitch("disable-features", "TouchpadAndTouchscreenEvents");
   } else {
     app.commandLine.appendSwitch("enable-features", "VaapiIgnoreDriverChecks");
   }
@@ -84,6 +86,7 @@ function applySwitches() {
 
   app.commandLine.appendSwitch("disable-gpu-watchdog");   // prevent GPU process reset after sustained load (lag after several matches)
   app.commandLine.appendSwitch("disable-hang-monitor");
+  app.commandLine.appendSwitch("gpu-process-priority", "high");
   app.commandLine.appendSwitch("disable-background-timer-throttling");
   app.commandLine.appendSwitch("disable-renderer-backgrounding");
   app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");

@@ -202,6 +202,18 @@ const createWindow = () => {
       console.warn('[bhop] CDP attach failed, using synthetic fallback:', e.message);
       _bhopDebugger = null;
     }
+    // Pin the GPU + renderer processes to high priority so they aren't
+    // preempted mid-match (kills frame drops / late-match stutter).
+    try {
+      const { app } = require("electron");
+      const os = require("os");
+      if (app.getGPUProcessPid) {
+        const gpuPid = app.getGPUProcessPid();
+        if (gpuPid) try { os.setPriority(gpuPid, -12); } catch (e) {}
+      }
+      // Renderer pid (this window's content process) — keep input snappy.
+      try { os.setPriority(gameWindow.webContents.getProcessId(), -8); } catch (e) {}
+    } catch (e) {}
     gameWindow.show();
   });
 
