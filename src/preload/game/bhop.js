@@ -97,6 +97,11 @@ function installBhopHook(capCheck) {
 
   function _pulseStrafe() {
     if (!_strafeKey) return;
+    // If the user is physically holding the strafe key, never send a synthetic
+    // keyup — that would drop their held input for a frame and cause a "stall"
+    // in that direction. Only auto-pulse (toggle) when the key is NOT held.
+    var physicallyHeld = (_strafeKey === 'a' && _aDown) || (_strafeKey === 'd' && _dDown);
+    if (physicallyHeld) { _strafePhysDown = true; return; }
     _postKey(_strafeKey, false);
     _postKey(_strafeKey, true);
     _strafePhysDown = true;
@@ -167,7 +172,9 @@ function installBhopHook(capCheck) {
     if (_rAFId !== null) { cancelAnimationFrame(_rAFId); _rAFId = null; }
     if (_qDownPhys) { _qDownPhys = false; _postKey('q', false); }
     if (_strafePhysDown && _strafeKey) {
-      _postKey(_strafeKey, false);
+      // Don't release a strafe key the user is still physically holding.
+      var physicallyHeld = (_strafeKey === 'a' && _aDown) || (_strafeKey === 'd' && _dDown);
+      if (!physicallyHeld) _postKey(_strafeKey, false);
       _strafePhysDown = false;
     }
     _strafeKey = null;
