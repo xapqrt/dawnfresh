@@ -1,8 +1,5 @@
 const { app, ipcMain, globalShortcut, protocol } = require("electron");
 const { applySwitches } = require("./util/switches");
-const fs = require("fs");
-const path = require("path");
-const os = require("os");
 
 // Allow the app shell (https + dawn-patch) to load without CSP/storage blocks.
 // Without this, the login page renders blank and auth never completes.
@@ -40,21 +37,20 @@ app.on("ready", async () => {
   });
 });
 
-app.on("before-quit", () => {
-  globalShortcut.unregisterAll();
+app.on("child-process-gone", (_, details) => {
+  if (details.type === "GPU") {
+    try {
+      const { getGameWindow } = require("./windows/game");
+      const gw = getGameWindow();
+      if (gw && !gw.isDestroyed()) {
+        gw.loadURL(gw.webContents.getURL() || "https://kirka.io/");
+      }
+    } catch (e) {}
+  }
 });
 
-ipcMain.on("save-recording", (e, buf) => {
-  try {
-    const clipsDir = path.join(os.homedir(), "Movies", "clips");
-    fs.mkdirSync(clipsDir, { recursive: true });
-    const filepath = path.join(clipsDir, `dawn-${Date.now()}.webm`);
-    fs.writeFile(filepath, Buffer.from(buf), (err) => {
-      if (err) console.error("Failed to save recording:", err);
-    });
-  } catch (err) {
-    console.error("Failed to save recording:", err);
-  }
+app.on("before-quit", () => {
+  globalShortcut.unregisterAll();
 });
 
 app.on("window-all-closed", () => app.quit());

@@ -144,6 +144,13 @@ ipcMain.on("open-swapper-folder", () => {
   }
 });
 
+ipcMain.on('bhop-key', (_, { key, down }) => {
+  if (!gameWindow || gameWindow.isDestroyed()) return;
+  try {
+    gameWindow.webContents.sendInputEvent({ type: down ? 'keyDown' : 'keyUp', keyCode: key, modifiers: [] });
+  } catch (e) {}
+});
+
 let gameWindow = null;
 
 const createWindow = () => {
@@ -220,7 +227,12 @@ const createWindow = () => {
   });
 
   gameWindow.webContents.on("render-process-gone", () => {
-    gameWindow.loadURL(gameWindow.webContents.getURL() || settings.base_url);
+    try {
+      const url = gameWindow.webContents.getURL();
+      gameWindow.loadURL(url || settings.base_url);
+    } catch (e) {
+      try { gameWindow.loadURL(settings.base_url); } catch (e2) {}
+    }
   });
 
   gameWindow.on("page-title-updated", (e) => e.preventDefault());
@@ -235,6 +247,7 @@ const createWindow = () => {
     ipcMain.removeAllListeners("screenshot");
     ipcMain.removeAllListeners("toggle-fullscreen");
     ipcMain.removeAllListeners("toggle-devtools");
+    ipcMain.removeAllListeners("bhop-key");
     gameWindow = null;
   });
 };
