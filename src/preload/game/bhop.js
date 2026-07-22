@@ -40,13 +40,15 @@ function installBhopHook() {
   });
 
   function _postKey(key, down) {
-    if (key === 'q') {
-      document.dispatchEvent(down ? _qDownEvt : _qUpEvt);
-    } else if (key === 'a') {
-      document.dispatchEvent(down ? _aDownEvt : _aUpEvt);
-    } else if (key === 'd') {
-      document.dispatchEvent(down ? _dDownEvt : _dUpEvt);
-    }
+    try {
+      if (key === 'q') {
+        document.dispatchEvent(down ? _qDownEvt : _qUpEvt);
+      } else if (key === 'a') {
+        document.dispatchEvent(down ? _aDownEvt : _aUpEvt);
+      } else if (key === 'd') {
+        document.dispatchEvent(down ? _dDownEvt : _dUpEvt);
+      }
+    } catch (e) { /* renderer-side dispatch: game's handler threw */ }
   }
 
   function _isInput(el) {
