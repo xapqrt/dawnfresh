@@ -260,7 +260,7 @@ const createWindow = () => {
     title: "Dawn Client",
     width: 1280,
     height: 720,
-    show: false,
+    show: true,
     backgroundColor: "#141414",
     backgroundThrottling: false,
     autoHideMenuBar: true,
@@ -406,6 +406,8 @@ const initGame = () => {
           if (code.includes(target)) {
             code = code.replace(target, "(window.__f5=f5,window.__zoomInstance=this,f5['a'][hF])");
           }
+          // Inject onGround hook into physics update loop if present
+          code = code.replace(/this\['onGround'\]\s*=\s*([^;,]+)/g, "this['onGround']=$1,window.__onGround=$1");
           code += `\n//# sourceURL=${targetScriptUrl}`;
 
           // Store in memory cache for this session
