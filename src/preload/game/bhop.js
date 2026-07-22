@@ -38,9 +38,10 @@ function installBhopHook() {
   window.addEventListener("keydown", function (e) {
     if (!e.isTrusted || e.repeat) return;
     var k = e.key;
+    var code = e.code;
     if (k === "Escape") { _shiftDown = false; _qDown = false; _aDown = false; _dDown = false; _stop(); return; }
     if (_isInput(e.target)) return;
-    if (k === "Shift") { _shiftDown = true; _send('q', true); }
+    if (code === "ShiftLeft" || (k === "Shift" && code !== "ShiftRight")) { _shiftDown = true; _send('q', true); }
     else if (k === "q" || k === "Q") { _qDown = true; _send('q', true); }
     else if (k === "a" || k === "A") { _aDown = true; _send('a', true); }
     else if (k === "d" || k === "D") { _dDown = true; _send('d', true); }
@@ -49,8 +50,9 @@ function installBhopHook() {
   window.addEventListener("keyup", function (e) {
     if (!e.isTrusted) return;
     var k = e.key;
+    var code = e.code;
     if (k === "Escape") return;
-    if (k === "Shift") { _shiftDown = false; if (!_shiftDown && !_qDown) _stop(); _sendState(); }
+    if (code === "ShiftLeft" || (k === "Shift" && code !== "ShiftRight")) { _shiftDown = false; if (!_shiftDown && !_qDown) _stop(); _sendState(); }
     else if (k === "q" || k === "Q") { _qDown = false; if (!_shiftDown && !_qDown) _stop(); _sendState(); }
     else if (k === "a" || k === "A") { _aDown = false; _sendState(); }
     else if (k === "d" || k === "D") { _dDown = false; _sendState(); }

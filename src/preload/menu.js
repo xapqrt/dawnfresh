@@ -1761,7 +1761,9 @@ class Menu {
 
   handleKeyEvents() {
     document.addEventListener("keydown", (e) => {
-      if (e.code !== this.settings.menu_keybind && e.code !== 'F10' && e.key !== 'Shift') return;
+      // Only open menu on Right Shift (ShiftRight) or F10, or configured menu_keybind. Exclude Left Shift (ShiftLeft).
+      if (e.code === 'ShiftLeft') return;
+      if (e.code !== this.settings.menu_keybind && e.code !== 'ShiftRight' && e.code !== 'F10') return;
       this._toggleMenu();
     }, true);
   }
