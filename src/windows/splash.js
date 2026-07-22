@@ -21,9 +21,9 @@ const createWindow = () => {
     resizable: false,
     show: false,
     webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: true,
+      nodeIntegration: true,
+      contextIsolation: false,
+      sandbox: false,
       preload: path.join(__dirname, "../preload/splash.js"),
     },
   });

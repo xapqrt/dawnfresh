@@ -267,10 +267,10 @@ const createWindow = () => {
     webPreferences: {
       scrollBounce: false,
       pinchZoom: false,
-      nodeIntegration: false,
-      contextIsolation: true,
+      nodeIntegration: true,
+      contextIsolation: false,
       webviewTag: false,
-      sandbox: true,
+      sandbox: false,
       webSecurity: false,
       nativeWindowOpen: true,
       pointerLockV2: true,
