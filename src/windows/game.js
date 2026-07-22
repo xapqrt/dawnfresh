@@ -1,15 +1,23 @@
-const { BrowserWindow, ipcMain, app, shell, session, protocol, net } = require("electron");
+const { BrowserWindow, ipcMain, app, shell, session, protocol } = require("electron");
 const { default_settings, allowed_urls } = require("../util/defaults.json");
 const { initResourceSwapper } = require('../addons/swapper.js');
 const path = require("path");
 const Store = require("electron-store");
 const fs = require("fs");
+const https = require("https");
 
-const fetchText = async (url) => {
-  const res = await net.fetch(url);
-  if (!res.ok) throw new Error(`fetchText: ${url} returned ${res.status}`);
-  return await res.text();
-};
+const fetchText = (url) => new Promise((resolve, reject) => {
+  https.get(url, (res) => {
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      reject(new Error(`fetchText: ${url} returned ${res.statusCode}`));
+      return;
+    }
+    const chunks = [];
+    res.on('data', chunk => chunks.push(chunk));
+    res.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
+    res.on('error', reject);
+  }).on('error', reject);
+});
 
 const store = new Store();
 if (!store.has("settings")) {
@@ -257,9 +265,30 @@ const createWindow = () => {
   });
 };
 
-// In-memory bundle cache: key = original script URL, value = patched code string.
-// This prevents re-downloading the multi-MB kirka.io bundle on every navigation.
+// Two-layer bundle cache: memory (within a session) + disk (across sessions).
+// The disk cache avoids the 20s HTTPS re-download on every app launch.
 const _bundleCache = new Map();
+const _cacheDir = path.join(app.getPath("userData"), "bundle-cache");
+
+const _cachePath = (url) => {
+  const hash = require("crypto").createHash("sha256").update(url).digest("hex").slice(0, 16);
+  return path.join(_cacheDir, hash + ".js");
+};
+
+const _readDiskCache = (url) => {
+  try {
+    const p = _cachePath(url);
+    if (fs.existsSync(p)) return fs.readFileSync(p, "utf-8");
+  } catch (e) {}
+  return null;
+};
+
+const _writeDiskCache = (url, code) => {
+  try {
+    fs.mkdirSync(_cacheDir, { recursive: true });
+    fs.writeFileSync(_cachePath(url), code, "utf-8");
+  } catch (e) {}
+};
 
 let _patchProtocolRegistered = false;
 
@@ -271,16 +300,23 @@ const initGame = () => {
         const urlParams = new URL(request.url);
         const targetScriptUrl = urlParams.searchParams.get('url');
         try {
-          // Serve from memory cache if available (avoids 20s re-download per navigation)
-          if (_bundleCache.has(targetScriptUrl)) {
-            const cached = _bundleCache.get(targetScriptUrl);
-            return new Response(cached, {
-              status: 200,
-              headers: {
-                'content-type': 'text/javascript',
-                'Access-Control-Allow-Origin': '*',
-              }
-            });
+          // Serve from memory cache first, then disk cache (avoids re-download)
+          {
+            const mem = _bundleCache.get(targetScriptUrl);
+            if (mem !== undefined) {
+              return new Response(mem, {
+                status: 200,
+                headers: { 'content-type': 'text/javascript', 'Access-Control-Allow-Origin': '*' }
+              });
+            }
+            const disk = _readDiskCache(targetScriptUrl);
+            if (disk !== null) {
+              _bundleCache.set(targetScriptUrl, disk);
+              return new Response(disk, {
+                status: 200,
+                headers: { 'content-type': 'text/javascript', 'Access-Control-Allow-Origin': '*' }
+              });
+            }
           }
 
           let code = await fetchText(targetScriptUrl);
@@ -289,12 +325,12 @@ const initGame = () => {
             code = code.replace(target, "(window.__f5=f5,window.__zoomInstance=this,f5['a'][hF])");
           }
           // Inject onGround hook into physics update loop if present
-          // Only match simple boolean/var assignments (never function calls) to avoid double-eval side effects
-          code = code.replace(/this\['onGround'\]\s*=\s*(true|false|\w+(?:\s*\|\s*\w+)*)/g, "this['onGround']=$1,window.__onGround=$1");
+          code = code.replace(/this\['onGround'\]\s*=\s*([^;,]+)/g, "this['onGround']=$1,window.__onGround=$1");
           code += `\n//# sourceURL=${targetScriptUrl}`;
 
-          // Store in memory cache for this session
+          // Store in memory cache (fast) + disk cache (persists across launches)
           _bundleCache.set(targetScriptUrl, code);
+          _writeDiskCache(targetScriptUrl, code);
 
           return new Response(code, {
             status: 200,
@@ -305,7 +341,6 @@ const initGame = () => {
           });
         } catch (err) {
           console.error('dawn-patch fetch failed:', err);
-          _bundleCache.set(targetScriptUrl, '');
           return new Response("", {
             status: 200,
             headers: {
